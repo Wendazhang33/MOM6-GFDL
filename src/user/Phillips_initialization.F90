@@ -55,6 +55,7 @@ subroutine Phillips_initialize_thickness(h, depth_tot, G, GV, US, param_file, ju
   real :: y_2             ! The y-position relative to the center of the domain [km]
   real :: half_strat      ! The fractional depth where the stratification is centered [nondim]
   real :: half_depth      ! The depth where the stratification is centered [Z ~> m]
+  logical :: just_read    ! If true, just read parameters but set nothing.
   logical :: reentrant_y  ! If true, model is re-entrant in the y direction
   character(len=40)  :: mdl = "Phillips_initialize_thickness" ! This subroutine's name.
   integer :: i, j, k, is, ie, js, je, isd, ied, jsd, jed, nz
@@ -146,6 +147,7 @@ subroutine Phillips_initialize_velocity(u, v, G, GV, US, param_file, just_read)
   real :: velocity_amplitude ! The amplitude of velocity perturbations [L T-1 ~> m s-1]
   real :: pi              ! The ratio of the circumference of a circle to its diameter [nondim]
   integer :: i, j, k, is, ie, js, je, nz, m
+  logical :: just_read    ! If true, just read parameters but set nothing.
   logical :: reentrant_y  ! If true, model is re-entrant in the y direction
   character(len=40)  :: mdl = "Phillips_initialize_velocity" ! This subroutine's name.
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
