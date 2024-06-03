@@ -1808,33 +1808,33 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
                   + (v(i+1,J-1,k)-v(i,J-1,k))*G%IdxBu(I,J-1)) ) ) )
         enddo ; enddo 
       else ; do j=js,je ; do i=is,ie
-         FrictWork(i,j,k) = GV%H_to_RZ * G%IareaT(i,j) * ( &
-                (str_xx(i,j)*CS%dy2h(i,j) * ( &
-                              uh(I,j,k)*G%dxCu(I,j)/(h_u(I,j)+h_neglect)*G%IdyCu(I,j)*G%IareaCu(I,j) &
-                             -uh(I-1,j,k)*G%dxCu(I-1,j)/(h_u(I-1,j)+h_neglect)*G%IdyCu(I-1,j)*G%IareaCu(I-1,j))     &
-                -str_xx(i,j)*CS%dx2h(i,j) * ( &
-                              vh(i,J,k)*G%dyCv(i,J)/(h_v(i,J)+h_neglect)*G%IdxCv(i,J)*G%IareaCv(i,J) &
-                             -vh(i,J-1,k)*G%dyCv(i,J-1)/(h_v(i,J-1)+h_neglect)*G%IdxCv(i,J-1)*G%IareaCv(i,J-1)))    &
-          +0.25*((str_xy(I,J)*(                                     &
-                     CS%dx2q(I,J)*(uh(I,j+1,k)/(h_u(I,j+1)+h_neglect)*G%IareaCu(I,j+1) & 
-                                 -uh(I,j,k)/(h_u(I,j)+h_neglect)*G%IareaCu(I,j))            &
-                    +CS%dy2q(I,J)*(vh(i+1,J,k)/(h_v(i+1,J)+h_neglect)*G%IareaCv(i+1,J) &
-                                 -vh(i,J,k)/(h_v(i,J)+h_neglect)*G%IareaCv(i,J)) )          &
-                +str_xy(I-1,J-1)*(                                 &
-                     CS%dx2q(I-1,J-1)*(uh(I-1,j,k)/(h_u(I-1,j)+h_neglect)*G%IareaCu(I-1,j) &
-                                     -uh(I-1,j-1,k)/(h_u(I-1,j-1)+h_neglect)*G%IareaCu(I-1,j-1))    &
-                    +CS%dy2q(I-1,J-1)*(vh(i,J-1,k)/(h_v(i,J-1)+h_neglect)*G%IareaCv(i,J-1) &
-                                     -vh(i-1,J-1,k)/(h_v(i-1,J-1)+h_neglect)*G%IareaCv(i-1,J-1)) )) &
-               +(str_xy(I-1,J)*(                                   &
-                     CS%dx2q(I-1,J)*(uh(I-1,j+1,k)/(h_u(I-1,j+1)+h_neglect)*G%IareaCu(I-1,j+1) &
-                                   -uh(I-1,j,k)/(h_u(I-1,j)+h_neglect)*G%IareaCu(I-1,j))      &
-                    +CS%dy2q(I-1,J)*(vh(i,J,k)/(h_v(i,J)+h_neglect)*G%IareaCv(i,J) &
-                                   -vh(i-1,J,k)/(h_v(i-1,J)+h_neglect)*G%IareaCv(i-1,J)) )        &
-                +str_xy(I,J-1)*(                                   &
-                     CS%dx2q(I,J-1)*(uh(I,j,k)/(h_u(I,j)+h_neglect)*G%IareaCu(I,j) &
-                                   -uh(I,j-1,k)/(h_u(I,j-1)+h_neglect)*G%IareaCu(I,j-1))          &
-                    +CS%dy2q(I,J-1)*(vh(i+1,J-1,k)/(h_v(i+1,J-1)+h_neglect)*G%IareaCv(i+1,J-1) &
-                                   -vh(i,J-1,k)/(h_v(i,J-1)+h_neglect)*G%IareaCv(i,J-1)) )) ) )
+        FrictWork(i,j,k) = GV%H_to_RZ * G%IareaT(i,j) * ( &
+                ((str_xx(i,j)*CS%dy2h(i,j) * ( &
+                              (uh(I,j,k)*G%dxCu(I,j)*G%IdyCu(I,j)*G%IareaCu(I,j)/(h_u(I,j)+h_neglect)) &
+                            - (uh(I-1,j,k)*G%dxCu(I-1,j)*G%IdyCu(I-1,j)*G%IareaCu(I-1,j)/(h_u(I-1,j)+h_neglect)) ) )     &
+               - (str_xx(i,j)*CS%dx2h(i,j) * ( &
+                              (vh(i,J,k)*G%dyCv(i,J)*G%IdxCv(i,J)*G%IareaCv(i,J)/(h_v(i,J)+h_neglect)) &
+                            - (vh(i,J-1,k)*G%dyCv(i,J-1)*G%IdxCv(i,J-1)*G%IareaCv(i,J-1)/(h_v(i,J-1)+h_neglect)) ) ) )    &
+       + (0.25*(((str_xy(I,J)*(                                     &
+                     (CS%dx2q(I,J)*((uh(I,j+1,k)*G%IareaCu(I,j+1)/(h_u(I,j+1)+h_neglect)) & 
+                                  - (uh(I,j,k)*G%IareaCu(I,j)/(h_u(I,j)+h_neglect))))            &
+                   + (CS%dy2q(I,J)*((vh(i+1,J,k)*G%IareaCv(i+1,J)/(h_v(i+1,J)+h_neglect)) &
+                                  - (vh(i,J,k)*G%IareaCv(i,J)/(h_v(i,J)+h_neglect)))) ))          &
+                +(str_xy(I-1,J-1)*(                                 &
+                     (CS%dx2q(I-1,J-1)*((uh(I-1,j,k)*G%IareaCu(I-1,j)/(h_u(I-1,j)+h_neglect)) &
+                                      - (uh(I-1,j-1,k)*G%IareaCu(I-1,j-1)/(h_u(I-1,j-1)+h_neglect))))    &
+                   + (CS%dy2q(I-1,J-1)*((vh(i,J-1,k)*G%IareaCv(i,J-1)/(h_v(i,J-1)+h_neglect)) &
+                                      - (vh(i-1,J-1,k)*G%IareaCv(i-1,J-1)/(h_v(i-1,J-1)+h_neglect)))) )) ) &
+               +((str_xy(I-1,J)*(                                   &
+                     (CS%dx2q(I-1,J)*((uh(I-1,j+1,k)*G%IareaCu(I-1,j+1)/(h_u(I-1,j+1)+h_neglect)) &
+                                    - (uh(I-1,j,k)*G%IareaCu(I-1,j)/(h_u(I-1,j)+h_neglect))))      &
+                   + (CS%dy2q(I-1,J)*((vh(i,J,k)*G%IareaCv(i,J)/(h_v(i,J)+h_neglect)) &
+                                    - (vh(i-1,J,k)*G%IareaCv(i-1,J)/(h_v(i-1,J)+h_neglect)))) ))        &
+                +(str_xy(I,J-1)*(                                   &
+                     (CS%dx2q(I,J-1)*((uh(I,j,k)*G%IareaCu(I,j)/(h_u(I,j)+h_neglect)) &
+                                    - (uh(I,j-1,k)*G%IareaCu(I,j-1)/(h_u(I,j-1)+h_neglect))))          &
+                   + (CS%dy2q(I,J-1)*((vh(i+1,J-1,k)*G%IareaCv(i+1,J-1)/(h_v(i+1,J-1)+h_neglect)) &
+                                    - (vh(i,J-1,k)*G%IareaCv(i,J-1)/(h_v(i,J-1)+h_neglect)))) )) ) )) )
       enddo ; enddo ; endif
     endif
 
@@ -1860,33 +1860,34 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
                     + (v(i+1,J-1,k)-v(i,J-1,k))*G%IdxBu(I,J-1)) ) ) )
         enddo ; enddo 
       else ; do j=js,je ; do i=is,ie
-         FrictWork_GME(i,j,k) = GV%H_to_RZ * G%IareaT(i,j) * ( &
-                (str_xx_GME(i,j)*CS%dy2h(i,j) * ( &
-                              uh(I,j,k)*G%dxCu(I,j)/(h_u(I,j)+h_neglect)*G%IdyCu(I,j)*G%IareaCu(I,j) &
-                             -uh(I-1,j,k)*G%dxCu(I-1,j)/(h_u(I-1,j)+h_neglect)*G%IdyCu(I-1,j)*G%IareaCu(I-1,j))     &
-                -str_xx_GME(i,j)*CS%dx2h(i,j) * ( &
-                              vh(i,J,k)*G%dyCv(i,J)/(h_v(i,J)+h_neglect)*G%IdxCv(i,J)*G%IareaCv(i,J) &
-                             -vh(i,J-1,k)*G%dyCv(i,J-1)/(h_v(i,J-1)+h_neglect)*G%IdxCv(i,J-1)*G%IareaCv(i,J-1)))    &
-          +0.25*((str_xy_GME(I,J)*(                                     &
-                     CS%dx2q(I,J)*(uh(I,j+1,k)/(h_u(I,j+1)+h_neglect)*G%IareaCu(I,j+1) & 
-                                 -uh(I,j,k)/(h_u(I,j)+h_neglect)*G%IareaCu(I,j))            &
-                    +CS%dy2q(I,J)*(vh(i+1,J,k)/(h_v(i+1,J)+h_neglect)*G%IareaCv(i+1,J) &
-                                 -vh(i,J,k)/(h_v(i,J)+h_neglect)*G%IareaCv(i,J)) )          &
-                +str_xy_GME(I-1,J-1)*(                                 &
-                     CS%dx2q(I-1,J-1)*(uh(I-1,j,k)/(h_u(I-1,j)+h_neglect)*G%IareaCu(I-1,j) &
-                                     -uh(I-1,j-1,k)/(h_u(I-1,j-1)+h_neglect)*G%IareaCu(I-1,j-1))    &
-                    +CS%dy2q(I-1,J-1)*(vh(i,J-1,k)/(h_v(i,J-1)+h_neglect)*G%IareaCv(i,J-1) &
-                                     -vh(i-1,J-1,k)/(h_v(i-1,J-1)+h_neglect)*G%IareaCv(i-1,J-1)) )) &
-               +(str_xy_GME(I-1,J)*(                                   &
-                     CS%dx2q(I-1,J)*(uh(I-1,j+1,k)/(h_u(I-1,j+1)+h_neglect)*G%IareaCu(I-1,j+1) &
-                                   -uh(I-1,j,k)/(h_u(I-1,j)+h_neglect)*G%IareaCu(I-1,j))      &
-                    +CS%dy2q(I-1,J)*(vh(i,J,k)/(h_v(i,J)+h_neglect)*G%IareaCv(i,J) &
-                                   -vh(i-1,J,k)/(h_v(i-1,J)+h_neglect)*G%IareaCv(i-1,J)) )        &
-                +str_xy_GME(I,J-1)*(                                   &
-                     CS%dx2q(I,J-1)*(uh(I,j,k)/(h_u(I,j)+h_neglect)*G%IareaCu(I,j) &
-                                   -uh(I,j-1,k)/(h_u(I,j-1)+h_neglect)*G%IareaCu(I,j-1))          &
-                    +CS%dy2q(I,J-1)*(vh(i+1,J-1,k)/(h_v(i+1,J-1)+h_neglect)*G%IareaCv(i+1,J-1) &
-                                   -vh(i,J-1,k)/(h_v(i,J-1)+h_neglect)*G%IareaCv(i,J-1)) )) ) )
+        FrictWork_GME(i,j,k) = GV%H_to_RZ * G%IareaT(i,j) * ( &
+                ((str_xx_GME(i,j)*CS%dy2h(i,j) * ( &
+                              (uh(I,j,k)*G%dxCu(I,j)*G%IdyCu(I,j)*G%IareaCu(I,j)/(h_u(I,j)+h_neglect)) &
+                            - (uh(I-1,j,k)*G%dxCu(I-1,j)*G%IdyCu(I-1,j)*G%IareaCu(I-1,j)/(h_u(I-1,j)+h_neglect)) ) )     &
+               - (str_xx_GME(i,j)*CS%dx2h(i,j) * ( &
+                              (vh(i,J,k)*G%dyCv(i,J)*G%IdxCv(i,J)*G%IareaCv(i,J)/(h_v(i,J)+h_neglect)) &
+                            - (vh(i,J-1,k)*G%dyCv(i,J-1)*G%IdxCv(i,J-1)*G%IareaCv(i,J-1)/(h_v(i,J-1)+h_neglect)) ) ) )    &
+       + (0.25*(((str_xy_GME(I,J)*(                                     &
+                     (CS%dx2q(I,J)*((uh(I,j+1,k)*G%IareaCu(I,j+1)/(h_u(I,j+1)+h_neglect)) &
+                                  - (uh(I,j,k)*G%IareaCu(I,j)/(h_u(I,j)+h_neglect))))            &
+                   + (CS%dy2q(I,J)*((vh(i+1,J,k)*G%IareaCv(i+1,J)/(h_v(i+1,J)+h_neglect)) &
+                                  - (vh(i,J,k)*G%IareaCv(i,J)/(h_v(i,J)+h_neglect)))) ))          &
+                +(str_xy_GME(I-1,J-1)*(                                 &
+                     (CS%dx2q(I-1,J-1)*((uh(I-1,j,k)*G%IareaCu(I-1,j)/(h_u(I-1,j)+h_neglect)) &
+                                      - (uh(I-1,j-1,k)*G%IareaCu(I-1,j-1)/(h_u(I-1,j-1)+h_neglect))))    &
+                   + (CS%dy2q(I-1,J-1)*((vh(i,J-1,k)*G%IareaCv(i,J-1)/(h_v(i,J-1)+h_neglect)) &
+                                      - (vh(i-1,J-1,k)*G%IareaCv(i-1,J-1)/(h_v(i-1,J-1)+h_neglect)))) )) ) &
+               +((str_xy_GME(I-1,J)*(                                   &
+                     (CS%dx2q(I-1,J)*((uh(I-1,j+1,k)*G%IareaCu(I-1,j+1)/(h_u(I-1,j+1)+h_neglect)) &
+                                    - (uh(I-1,j,k)*G%IareaCu(I-1,j)/(h_u(I-1,j)+h_neglect))))      &
+                   + (CS%dy2q(I-1,J)*((vh(i,J,k)*G%IareaCv(i,J)/(h_v(i,J)+h_neglect)) &
+                                    - (vh(i-1,J,k)*G%IareaCv(i-1,J)/(h_v(i-1,J)+h_neglect)))) ))        &
+                +(str_xy_GME(I,J-1)*(                                   &
+                     (CS%dx2q(I,J-1)*((uh(I,j,k)*G%IareaCu(I,j)/(h_u(I,j)+h_neglect)) &
+                                    - (uh(I,j-1,k)*G%IareaCu(I,j-1)/(h_u(I,j-1)+h_neglect))))          &
+                   + (CS%dy2q(I,J-1)*((vh(i+1,J-1,k)*G%IareaCv(i+1,J-1)/(h_v(i+1,J-1)+h_neglect)) &
+                                    - (vh(i,J-1,k)*G%IareaCv(i,J-1)/(h_v(i,J-1)+h_neglect)))) )) ) )) )
+
       enddo ; enddo ; endif
     endif
 
