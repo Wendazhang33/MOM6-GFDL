@@ -88,8 +88,8 @@ type, public :: hor_visc_CS ; private
                              !! in setting the corner-point viscosities when USE_KH_BG_2D=True.
   real    :: Kh_bg_min       !< The minimum value allowed for Laplacian horizontal
                              !! viscosity [L2 T-1 ~> m2 s-1]. The default is 0.0.
-  logical :: FrictWork_bug    !< If true, retain an answer-changing bug
-                             !! in calculating FrictWork, which cancels the h in thickness flux and the h at velocity point.
+  logical :: FrictWork_bug    !< If true, retain an answer-changing bug in calculating FrictWork,
+                             !! which cancels the h in thickness flux and the h at velocity point.
   logical :: use_land_mask   !< Use the land mask for the computation of thicknesses
                              !! at velocity locations. This eliminates the dependence on
                              !! arbitrary values over land or outside of the domain.
@@ -1787,7 +1787,7 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
       enddo
     endif
 
-    if (find_FrictWork) then  
+    if (find_FrictWork) then
       if (CS%FrictWork_bug) then ; do j=js,je ; do i=is,ie
       ! Diagnose   str_xx*d_x u - str_yy*d_y v + str_xy*(d_y u + d_x v)
       ! This is the old formulation that includes energy diffusion
@@ -1806,17 +1806,17 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
                  + str_xy(I,J-1) *                                &
                    ((u(I,j,k)-u(I,j-1,k))*G%IdyBu(I,J-1)          &
                   + (v(i+1,J-1,k)-v(i,J-1,k))*G%IdxBu(I,J-1)) ) ) )
-        enddo ; enddo 
+          enddo ; enddo
       else ; do j=js,je ; do i=is,ie
         FrictWork(i,j,k) = GV%H_to_RZ * G%IareaT(i,j) * ( &
-                ((str_xx(i,j)*CS%dy2h(i,j) * ( &
-                              (uh(I,j,k)*G%dxCu(I,j)*G%IdyCu(I,j)*G%IareaCu(I,j)/(h_u(I,j)+h_neglect)) &
-                            - (uh(I-1,j,k)*G%dxCu(I-1,j)*G%IdyCu(I-1,j)*G%IareaCu(I-1,j)/(h_u(I-1,j)+h_neglect)) ) )     &
-               - (str_xx(i,j)*CS%dx2h(i,j) * ( &
-                              (vh(i,J,k)*G%dyCv(i,J)*G%IdxCv(i,J)*G%IareaCv(i,J)/(h_v(i,J)+h_neglect)) &
-                            - (vh(i,J-1,k)*G%dyCv(i,J-1)*G%IdxCv(i,J-1)*G%IareaCv(i,J-1)/(h_v(i,J-1)+h_neglect)) ) ) )    &
+            ((str_xx(i,j)*CS%dy2h(i,j) * ( &
+                  (uh(I,j,k)*G%dxCu(I,j)*G%IdyCu(I,j)*G%IareaCu(I,j)/(h_u(I,j)+h_neglect)) &
+                - (uh(I-1,j,k)*G%dxCu(I-1,j)*G%IdyCu(I-1,j)*G%IareaCu(I-1,j)/(h_u(I-1,j)+h_neglect)) ) ) &
+           - (str_xx(i,j)*CS%dx2h(i,j) * ( &
+                  (vh(i,J,k)*G%dyCv(i,J)*G%IdxCv(i,J)*G%IareaCv(i,J)/(h_v(i,J)+h_neglect)) &
+                - (vh(i,J-1,k)*G%dyCv(i,J-1)*G%IdxCv(i,J-1)*G%IareaCv(i,J-1)/(h_v(i,J-1)+h_neglect)) ) )) &
        + (0.25*(((str_xy(I,J)*(                                     &
-                     (CS%dx2q(I,J)*((uh(I,j+1,k)*G%IareaCu(I,j+1)/(h_u(I,j+1)+h_neglect)) & 
+                     (CS%dx2q(I,J)*((uh(I,j+1,k)*G%IareaCu(I,j+1)/(h_u(I,j+1)+h_neglect)) &
                                   - (uh(I,j,k)*G%IareaCu(I,j)/(h_u(I,j)+h_neglect))))            &
                    + (CS%dy2q(I,J)*((vh(i+1,J,k)*G%IareaCv(i+1,J)/(h_v(i+1,J)+h_neglect)) &
                                   - (vh(i,J,k)*G%IareaCv(i,J)/(h_v(i,J)+h_neglect)))) ))          &
@@ -1839,7 +1839,7 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
     endif
 
 
-    if (CS%use_GME) then 
+    if (CS%use_GME) then
       if (CS%FrictWork_bug) then ; do j=js,je ; do i=is,ie
       ! Diagnose   str_xx_GME*d_x u - str_yy_GME*d_y v + str_xy_GME*(d_y u + d_x v)
       ! This is the old formulation that includes energy diffusion
@@ -1858,15 +1858,15 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
                    + str_xy_GME(I,J-1) *                             &
                      ((u(I,j,k)-u(I,j-1,k))*G%IdyBu(I,J-1)           &
                     + (v(i+1,J-1,k)-v(i,J-1,k))*G%IdxBu(I,J-1)) ) ) )
-        enddo ; enddo 
+        enddo ; enddo
       else ; do j=js,je ; do i=is,ie
         FrictWork_GME(i,j,k) = GV%H_to_RZ * G%IareaT(i,j) * ( &
-                ((str_xx_GME(i,j)*CS%dy2h(i,j) * ( &
-                              (uh(I,j,k)*G%dxCu(I,j)*G%IdyCu(I,j)*G%IareaCu(I,j)/(h_u(I,j)+h_neglect)) &
-                            - (uh(I-1,j,k)*G%dxCu(I-1,j)*G%IdyCu(I-1,j)*G%IareaCu(I-1,j)/(h_u(I-1,j)+h_neglect)) ) )     &
-               - (str_xx_GME(i,j)*CS%dx2h(i,j) * ( &
-                              (vh(i,J,k)*G%dyCv(i,J)*G%IdxCv(i,J)*G%IareaCv(i,J)/(h_v(i,J)+h_neglect)) &
-                            - (vh(i,J-1,k)*G%dyCv(i,J-1)*G%IdxCv(i,J-1)*G%IareaCv(i,J-1)/(h_v(i,J-1)+h_neglect)) ) ) )    &
+            ((str_xx_GME(i,j)*CS%dy2h(i,j) * ( &
+                  (uh(I,j,k)*G%dxCu(I,j)*G%IdyCu(I,j)*G%IareaCu(I,j)/(h_u(I,j)+h_neglect)) &
+                - (uh(I-1,j,k)*G%dxCu(I-1,j)*G%IdyCu(I-1,j)*G%IareaCu(I-1,j)/(h_u(I-1,j)+h_neglect)) ) ) &
+           - (str_xx_GME(i,j)*CS%dx2h(i,j) * ( &
+                  (vh(i,J,k)*G%dyCv(i,J)*G%IdxCv(i,J)*G%IareaCv(i,J)/(h_v(i,J)+h_neglect)) &
+                - (vh(i,J-1,k)*G%dyCv(i,J-1)*G%IdxCv(i,J-1)*G%IareaCv(i,J-1)/(h_v(i,J-1)+h_neglect)) ) )) &
        + (0.25*(((str_xy_GME(I,J)*(                                     &
                      (CS%dx2q(I,J)*((uh(I,j+1,k)*G%IareaCu(I,j+1)/(h_u(I,j+1)+h_neglect)) &
                                   - (uh(I,j,k)*G%IareaCu(I,j)/(h_u(I,j)+h_neglect))))            &
