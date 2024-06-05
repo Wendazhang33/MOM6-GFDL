@@ -614,7 +614,7 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
 
   !$OMP parallel do default(none) &
   !$OMP shared( &
-  !$OMP   CS, G, GV, US, OBC, VarMix, MEKE, u, v, h, &
+  !$OMP   CS, G, GV, US, OBC, VarMix, MEKE, u, v, h, uh, vh, &
   !$OMP   is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, &
   !$OMP   is_vort, ie_vort, js_vort, je_vort, &
   !$OMP   is_Kh, ie_Kh, js_Kh, je_Kh, &
