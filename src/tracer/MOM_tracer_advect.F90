@@ -39,6 +39,7 @@ type, public :: tracer_advect_CS ; private
   logical :: useHuynhStencilBug = .false. !< If true, use the incorrect stencil width.
                                    !! This is provided for compatibility with legacy simuations.
   type(group_pass_type) :: pass_uhr_vhr_t_hprev !< A structure used for group passes
+  type(group_pass_type) :: pass_uhr_vhr_resolved !< A structure used for group passes
   integer :: default_advect_scheme = -1 !< Determines which reconstruction to use
 end type tracer_advect_CS
 
@@ -53,7 +54,8 @@ contains
 !> This routine time steps the tracer concentration using a
 !! monotonic, conservative, weakly diffusive scheme.
 subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first_in, &
-                         vol_prev, max_iter_in, update_vol_prev, uhr_out, vhr_out)
+                         vol_prev, max_iter_in, update_vol_prev, uhr_out, vhr_out, &
+                         uhtr_resolved, vhtr_resolved)
   type(ocean_grid_type),   intent(inout) :: G     !< ocean grid structure
   type(verticalGrid_type), intent(in)    :: GV    !< ocean vertical grid structure
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
@@ -87,6 +89,14 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
                  optional, intent(out)   :: vhr_out !< Remaining accumulated volume or mass fluxes
                                                   !! through the meridional faces [H L2 ~> m3 or kg]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
+                 optional, intent(in)   :: uhtr_resolved !< Accumulated volume or mass fluxes
+                                                  !! due to resolved flow
+                                                  !! through the zonal faces [H L2 ~> m3 or kg]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
+                 optional, intent(in)   :: vhtr_resolved !< Accumulated volume or mass fluxes
+                                                  !! due to resolved flow
+                                                  !! through the meridional faces [H L2 ~> m3 or kg]
 
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)) :: &
     hprev           ! cell volume at the end of previous tracer change [H L2 ~> m3 or kg]
@@ -94,6 +104,10 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
     uhr             ! The remaining zonal thickness flux [H L2 ~> m3 or kg]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
     vhr             ! The remaining meridional thickness fluxes [H L2 ~> m3 or kg]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: &
+    uhr_resolved    ! The remaining resolved zonal thickness flux [H L2 ~> m3 or kg]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: &
+    vhr_resolved    ! The remaining resolved meridional thickness fluxes [H L2 ~> m3 or kg]
   real :: uh_neglect(SZIB_(G),SZJ_(G)) ! uh_neglect and vh_neglect are the
   real :: vh_neglect(SZI_(G),SZJB_(G)) ! magnitude of remaining transports that
                                        ! can be simply discarded [H L2 ~> m3 or kg].
@@ -165,6 +179,8 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   call cpu_clock_begin(id_clock_pass)
   call create_group_pass(CS%pass_uhr_vhr_t_hprev, uhr, vhr, G%Domain)
   call create_group_pass(CS%pass_uhr_vhr_t_hprev, hprev, G%Domain)
+  if (present(uhtr_resolved) .or. present(vhtr_resolved)) &
+      call create_group_pass(CS%pass_uhr_vhr_resolved, uhr_resolved, vhr_resolved, G%Domain)
   do m=1,ntr
     call create_group_pass(CS%pass_uhr_vhr_t_hprev, Reg%Tr(m)%t, G%Domain)
   enddo
@@ -178,11 +194,19 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
   do k=1,nz
     do j=jsd,jed ; do I=IsdB,IedB ; uhr(I,j,k) = 0.0 ; enddo ; enddo
     do J=jsdB,jedB ; do i=Isd,Ied ; vhr(i,J,k) = 0.0 ; enddo ; enddo
+    if (present(uhtr_resolved) .or. present(vhtr_resolved)) then
+      do j=jsd,jed ; do I=IsdB,IedB ; uhr_resolved(I,j,k) = 0.0 ; enddo ; enddo
+      do J=jsdB,jedB ; do i=Isd,Ied ; vhr_resolved(i,J,k) = 0.0 ; enddo ; enddo
+    endif
     do j=jsd,jed ; do i=Isd,Ied ; hprev(i,j,k) = 0.0 ; enddo ; enddo
     domore_k(k)=1
     !  Put the remaining (total) thickness fluxes into uhr and vhr.
     do j=js,je ; do I=is-1,ie ; uhr(I,j,k) = uhtr(I,j,k) ; enddo ; enddo
     do J=js-1,je ; do i=is,ie ; vhr(i,J,k) = vhtr(i,J,k) ; enddo ; enddo
+    if (present(uhtr_resolved) .or. present(vhtr_resolved)) then
+      do j=js,je ; do I=is-1,ie ; uhr_resolved(I,j,k) = uhtr_resolved(I,j,k) ; enddo ; enddo
+      do J=js-1,je ; do i=is,ie ; vhr_resolved(i,J,k) = vhtr_resolved(i,J,k) ; enddo ; enddo
+    endif
     if (.not. present(vol_prev)) then
     !   This loop reconstructs the thickness field the last time that the
     ! tracers were updated, probably just after the diabatic forcing.  A useful
@@ -221,6 +245,12 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
     if (associated(Reg%Tr(m)%advection_xy)) Reg%Tr(m)%advection_xy(:,:,:) = 0.0
     if (associated(Reg%Tr(m)%ad2d_x)) Reg%Tr(m)%ad2d_x(:,:) = 0.0
     if (associated(Reg%Tr(m)%ad2d_y)) Reg%Tr(m)%ad2d_y(:,:) = 0.0
+
+    if (associated(Reg%Tr(m)%ad_x_resolved)) Reg%Tr(m)%ad_x_resolved(:,:,:) = 0.0
+    if (associated(Reg%Tr(m)%ad_y_resolved)) Reg%Tr(m)%ad_y_resolved(:,:,:) = 0.0
+    if (associated(Reg%Tr(m)%advection_xy_resolved)) Reg%Tr(m)%advection_xy_resolved(:,:,:) = 0.0
+    if (associated(Reg%Tr(m)%ad2d_x_resolved)) Reg%Tr(m)%ad2d_x_resolved(:,:) = 0.0
+    if (associated(Reg%Tr(m)%ad2d_y_resolved)) Reg%Tr(m)%ad2d_y_resolved(:,:) = 0.0
   enddo
   !$OMP end parallel
 
@@ -231,6 +261,8 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
 
     if (isv > is-stencil) then
       call do_group_pass(CS%pass_uhr_vhr_t_hprev, G%Domain, clock=id_clock_pass)
+      if (present(uhtr_resolved) .or. present(vhtr_resolved)) &
+          call do_group_pass(CS%pass_uhr_vhr_resolved, G%Domain, clock=id_clock_pass)
 
       isv = is - nsten_halo * stencil ; jsv = js - nsten_halo * stencil
       iev = ie + nsten_halo * stencil ; jev = je + nsten_halo * stencil
@@ -277,16 +309,28 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         ! First, advect zonally.
-        call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
+        if (present(uhtr_resolved)) then
+          call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
+                      isv, iev, jsv-stencil, jev+stencil, k, G, GV, US, &
+                      local_advect_scheme, uhtr_resolved=uhr_resolved)
+        else
+          call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                       isv, iev, jsv-stencil, jev+stencil, k, G, GV, US, &
                       local_advect_scheme)
+        endif
       endif ; enddo
 
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         !  Next, advect meridionally.
-        call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
+        if (present(vhtr_resolved)) then
+          call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
+                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme, &
+                      vhtr_resolved=vhr_resolved)
+        else
+          call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                       isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme)
+        endif
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -300,16 +344,27 @@ subroutine advect_tracer(h_end, uhtr, vhtr, OBC, dt, G, GV, US, CS, Reg, x_first
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         ! First, advect meridionally.
-        call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
+        if (present(vhtr_resolved)) then
+          call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
+                      isv-stencil, iev+stencil, jsv, jev, k, G, GV, US, &
+                      local_advect_scheme, vhtr_resolved=vhr_resolved)
+        else
+          call advect_y(Reg%Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                       isv-stencil, iev+stencil, jsv, jev, k, G, GV, US, &
                       local_advect_scheme)
+        endif
       endif ; enddo
 
       !$OMP do ordered
       do k=1,nz ; if (domore_k(k) > 0) then
         ! Next, advect zonally.
-        call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
+        if (present(uhtr_resolved)) then
+          call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
+                      isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme, uhtr_resolved=uhr_resolved)
+        else
+          call advect_x(Reg%Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                       isv, iev, jsv, jev, k, G, GV, US, local_advect_scheme)
+        endif
 
         ! Update domore_k(k) for the next iteration
         domore_k(k) = 0
@@ -355,7 +410,7 @@ end subroutine advect_tracer
 !> This subroutine does 1-d flux-form advection in the zonal direction using
 !! a monotonic piecewise linear scheme.
 subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, advect_schemes)
+                    is, ie, js, je, k, G, GV, US, advect_schemes, uhtr_resolved)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr  !< The number of tracers
@@ -377,11 +432,17 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
   integer, dimension(ntr),                   intent(in)    :: advect_schemes !< list of advection schemes to use
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), optional, intent(in) :: uhtr_resolved !< accumulated volume/mass flux
+                                                                  !!  due to resolved flow
+                                                                  !!  through the zonal face [H L2 ~> m3 or kg]
 
   real, dimension(SZI_(G),ntr) :: &
     slope_x             ! The concentration slope per grid point [conc].
   real, dimension(SZIB_(G),SZJ_(G),ntr) :: &
     flux_x              ! The tracer flux across a boundary [H L2 conc ~> m3 conc or kg conc].
+  real, dimension(SZIB_(G),SZJ_(G),ntr) :: &
+    flux_x_resolved     ! The tracer flux due to resolved flow
+                        ! across a boundary [H L2 conc ~> m3 conc or kg conc].
   real, dimension(SZI_(G),ntr) :: &
     T_tmp               ! The copy of the tracer concentration at constant i,k [conc].
 
@@ -390,6 +451,8 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
                         ! due to advection out the other side of
                         ! the grid box, both in [H L2 ~> m3 or kg].
   real :: uhh(SZIB_(G)) ! The zonal flux that occurs during the
+                        ! current iteration [H L2 ~> m3 or kg].
+  real :: uhh_resolved(SZIB_(G)) ! The zonal flux due to resolved flow that occurs during the
                         ! current iteration [H L2 ~> m3 or kg].
   real, dimension(SZIB_(G)) :: &
     hlst, &             ! Work variable [H L2 ~> m3 or kg].
@@ -414,10 +477,12 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   integer :: i, j, m, n, i_up, stencil, ntr_id
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical, dimension(SZJ_(G),SZK_(GV)) :: domore_u_initial
+  logical :: use_resolved_flux
 
   ! keep a local copy of the initial values of domore_u, which is to be used when computing ad2d_x
   ! diagnostic at the end of this subroutine.
   domore_u_initial = domore_u
+  use_resolved_flux = present(uhtr_resolved)
 
   usePLMslope = .false.
   ! stencil for calculating slope values
@@ -518,6 +583,8 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
           ((uhr(I,j,k) > 0.0) .and. (hprev(i,j,k) <= tiny_h)) ) then
         uhh(I) = 0.0
         CFL(I) = 0.0
+        if (use_resolved_flux) &
+            uhh_resolved(I) = 0.0
       elseif (uhr(I,j,k) < 0.0) then
         hup = hprev(i+1,j,k) - G%areaT(i+1,j)*min_h
         hlos = MAX(0.0, uhr(I+1,j,k))
@@ -525,8 +592,12 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
             ((0.5*hup + uhr(I,j,k)) < 0.0)) then
           uhh(I) = MIN(-0.5*hup, -hup+hlos, 0.0)
           domore_u(j,k) = .true.
+          if (use_resolved_flux) &
+              uhh_resolved(I) = MIN(-0.5*hup, -hup+hlos, 0.0)
         else
           uhh(I) = uhr(I,j,k)
+          if (use_resolved_flux) &
+              uhh_resolved(I) = uhtr_resolved(I,j,k)
         endif
         CFL(I) = - uhh(I) / (hprev(i+1,j,k))  ! CFL is positive
       else
@@ -535,9 +606,13 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         if ((((hup - hlos) - uhr(I,j,k)) < 0.0) .and. &
             ((0.5*hup - uhr(I,j,k)) < 0.0)) then
           uhh(I) = MAX(0.5*hup, hup-hlos, 0.0)
+          if (use_resolved_flux) &
+              uhh_resolved(I) = MAX(0.5*hup, hup-hlos, 0.0)
           domore_u(j,k) = .true.
         else
           uhh(I) = uhr(I,j,k)
+          if (use_resolved_flux) &
+              uhh_resolved(I) = uhtr_resolved(I,j,k)
         endif
         CFL(I) = uhh(I) / (hprev(i,j,k))  ! CFL is positive
       endif
@@ -581,9 +656,15 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
           if (uhh(I) >= 0.0) then
             flux_x(I,j,m) = uhh(I)*( aR - 0.5 * CFL(I) * ( &
                  ( aR - aL ) - a6 * ( 1. - 2./3. * CFL(I) ) ) )
+            if (use_resolved_flux) &
+                 flux_x_resolved(I,j,m) = uhh_resolved(I)*( aR - 0.5 * CFL(I) * ( &
+                   ( aR - aL ) - a6 * ( 1. - 2./3. * CFL(I) ) ) )
           else
             flux_x(I,j,m) = uhh(I)*( aL + 0.5 * CFL(I) * ( &
                  ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
+            if (use_resolved_flux) &
+                 flux_x_resolved(I,j,m) = uhh_resolved(I)*( aL + 0.5 * CFL(I) * ( &
+                   ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
           endif
         enddo
       else ! PLM
@@ -596,6 +677,8 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
             ! Alternative implementation of PLM
             Tc = T_tmp(i,m)
             flux_x(I,j,m) = uhh(I)*( Tc + 0.5 * slope_x(i,m) * ( 1. - CFL(I) ) )
+            if (use_resolved_flux) &
+                 flux_x_resolved(I,j,m) = uhh_resolved(I)*( Tc + 0.5 * slope_x(i,m) * ( 1. - CFL(I) ) )
           else
             ! Indirect implementation of PLM
            !aL = Tr(m)%t(i+1,j,k) - 0.5 * slope_x(i+1,m)
@@ -604,6 +687,8 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
             ! Alternative implementation of PLM
             Tc = T_tmp(i+1,m)
             flux_x(I,j,m) = uhh(I)*( Tc - 0.5 * slope_x(i+1,m) * ( 1. - CFL(I) ) )
+            if (use_resolved_flux) &
+                 flux_x_resolved(I,j,m) = uhh_resolved(I)*( Tc - 0.5 * slope_x(i+1,m) * ( 1. - CFL(I) ) )
           endif
         enddo
       endif ! usePPM
@@ -622,12 +707,21 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
               if ((uhr(I,j,k) > 0.0) .and. (segment%direction == OBC_DIRECTION_W) .or. &
                   (uhr(I,j,k) < 0.0) .and. (segment%direction == OBC_DIRECTION_E)) then
                 uhh(I) = uhr(I,j,k)
+                if (use_resolved_flux) &
+                     uhh_resolved = uhtr_resolved(I,j,k)
               ! should the reservoir evolve for this case Kate ?? - Nope
                 do m=1,segment%tr_Reg%ntseg
                   ntr_id = segment%tr_reg%Tr(m)%ntr_index
                   if (allocated(segment%tr_Reg%Tr(m)%tres)) then
                     flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%tres(I,j,k)
-                  else ; flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc ; endif
+                    if (use_resolved_flux) &
+                        flux_x_resolved(I,j,ntr_id) = uhh_resolved(I)*segment%tr_Reg%Tr(m)%tres(I,j,k)
+                  else
+                    flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc
+                    if (use_resolved_flux) &
+                        flux_x_resolved(I,j,ntr_id) = uhh_resolved(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc
+
+                  endif
                 enddo
               endif
             endif
@@ -647,11 +741,20 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
             if ((uhr(I,j,k) > 0.0) .and. (G%mask2dT(i,j) < 0.5) .or. &
                 (uhr(I,j,k) < 0.0) .and. (G%mask2dT(i+1,j) < 0.5)) then
               uhh(I) = uhr(I,j,k)
+              if (use_resolved_flux) &
+                   uhh_resolved(I) = uhtr_resolved(I,j,k)
+
               do m=1,segment%tr_Reg%ntseg
                 ntr_id = segment%tr_reg%Tr(m)%ntr_index
                 if (allocated(segment%tr_Reg%Tr(m)%tres)) then
                   flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%tres(I,j,k)
-                else; flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc; endif
+                  if (use_resolved_flux) &
+                      flux_x_resolved(I,j,ntr_id) = uhh_resolved(I)*segment%tr_Reg%Tr(m)%tres(I,j,k)
+                else
+                  flux_x(I,j,ntr_id) = uhh(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc
+                  if (use_resolved_flux) &
+                      flux_x_resolved(I,j,ntr_id) = uhh_resolved(I)*segment%tr_Reg%Tr(m)%OBC_inflow_conc
+                endif
               enddo
             endif
           endif
@@ -719,6 +822,21 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
         endif ; enddo
       endif
 
+      ! diagnostics
+      if (associated(Tr(m)%ad_x_resolved)) then ; do I=is-1,ie ; if (do_i(i,j) .or. do_i(i+1,j)) then
+        Tr(m)%ad_x_resolved(I,j,k) = Tr(m)%ad_x_resolved(I,j,k) + flux_x_resolved(I,j,m)*Idt
+      endif ; enddo ; endif
+
+      ! diagnose convergence of flux_x (do not use the Ihnew(i) part of the logic).
+      ! division by areaT to get into W/m2 for heat and kg/(s*m2) for salt.
+      if (associated(Tr(m)%advection_xy_resolved)) then
+        do i=is,ie ; if (do_i(i,j)) then
+          Tr(m)%advection_xy_resolved(i,j,k) = Tr(m)%advection_xy_resolved(i,j,k) - &
+                                          (flux_x_resolved(I,j,m) - flux_x_resolved(I-1,j,m)) * &
+                                          Idt * G%IareaT(i,j)
+        endif ; enddo
+      endif
+
     enddo
 
   endif ; enddo ! End of j-loop.
@@ -742,12 +860,22 @@ subroutine advect_x(Tr, hprev, uhr, uh_neglect, OBC, domore_u, ntr, Idt, &
   endif ; enddo ! End of m-loop.
   !$OMP end ordered
 
+  !$OMP ordered
+  do m=1,ntr ; if (associated(Tr(m)%ad2d_x_resolved)) then
+    do j=js,je ; if (domore_u_initial(j,k)) then
+      do I=is-1,ie ; if (do_i(i,j) .or. do_i(i+1,j)) then
+        Tr(m)%ad2d_x_resolved(I,j) = Tr(m)%ad2d_x_resolved(I,j) + flux_x_resolved(I,j,m)*Idt
+      endif ; enddo
+    endif ; enddo
+  endif ; enddo ! End of m-loop.
+  !$OMP end ordered
+
 end subroutine advect_x
 
 !> This subroutine does 1-d flux-form advection using a monotonic piecewise
 !! linear scheme.
 subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
-                    is, ie, js, je, k, G, GV, US, advect_schemes)
+                    is, ie, js, je, k, G, GV, US, advect_schemes, vhtr_resolved)
   type(ocean_grid_type),                     intent(inout) :: G    !< The ocean's grid structure
   type(verticalGrid_type),                   intent(in)    :: GV   !< The ocean's vertical grid structure
   integer,                                   intent(in)    :: ntr !< The number of tracers
@@ -769,14 +897,21 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   integer,                                   intent(in)    :: k   !< The k-level to work on
   type(unit_scale_type),                     intent(in)    :: US  !< A dimensional unit scaling type
   integer, dimension(ntr),                   intent(in)    :: advect_schemes !< list of advection schemes to use
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), optional, intent(in) :: vhtr_resolved !< accumulated volume/mass flux
+                                                  !!  due to resolved flow
+                                                  !!  through the meridional face [H L2 ~> m3 or kg]
 
   real, dimension(SZI_(G),ntr,SZJ_(G)) :: &
     slope_y                     ! The concentration slope per grid point [conc].
   real, dimension(SZI_(G),ntr,SZJB_(G)) :: &
-    flux_y                      ! The tracer flux across a boundary [H L2 conc ~> m3 conc or kg conc].
+    flux_y, &                   ! The tracer flux across a boundary [H L2 conc ~> m3 conc or kg conc].
+    flux_y_resolved             ! The tracer flux due to resolved flow across a boundary
+                                !! [H L2 conc ~> m3 conc or kg conc].
   real, dimension(SZI_(G),ntr,SZJB_(G)) :: &
     T_tmp               ! The copy of the tracer concentration at constant i,k [conc].
   real :: vhh(SZI_(G),SZJB_(G)) ! The meridional flux that occurs during the
+                                ! current iteration [H L2 ~> m3 or kg].
+  real :: vhh_resolved(SZI_(G),SZJB_(G)) ! The meridional flux due to resolved flow that occurs during the
                                 ! current iteration [H L2 ~> m3 or kg].
   real :: hup, hlos             ! hup is the upwind volume, hlos is the
                                 ! part of that volume that might be lost
@@ -806,6 +941,7 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
   integer :: i, j, j2, m, n, j_up, stencil, ntr_id
   type(OBC_segment_type), pointer :: segment=>NULL()
   logical :: domore_v_initial(SZJB_(G)) ! Initial state of domore_v
+  logical :: use_resolved_flux
 
   usePLMslope = .false.
   ! stencil for calculating slope values
@@ -835,6 +971,8 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
     if (domore_v(J,k)) then ; do j2=1-stencil,stencil ; do_j_tr(j+j2) = .true. ; enddo ; endif
   enddo
   domore_v_initial(:) = domore_v(:,k)
+
+  use_resolved_flux = present(vhtr_resolved)
 
   ! Calculate the j-direction profiles (slopes) of each tracer that
   ! is being advected.
@@ -922,6 +1060,8 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
           ((vhr(i,J,k) > 0.0) .and. (hprev(i,j,k) <= tiny_h)) ) then
         vhh(i,J) = 0.0
         CFL(i) = 0.0
+        if (use_resolved_flux) &
+            vhh_resolved(i,J) = 0.0
       elseif (vhr(i,J,k) < 0.0) then
         hup = hprev(i,j+1,k) - G%areaT(i,j+1)*min_h
         hlos = MAX(0.0, vhr(i,J+1,k))
@@ -929,8 +1069,12 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
             ((0.5*hup + vhr(i,J,k)) < 0.0)) then
           vhh(i,J) = MIN(-0.5*hup, -hup+hlos, 0.0)
           domore_v(J,k) = .true.
+          if (use_resolved_flux) &
+              vhh_resolved(i,J) = MIN(-0.5*hup, -hup+hlos, 0.0)
         else
           vhh(i,J) = vhr(i,J,k)
+          if (use_resolved_flux) &
+              vhh_resolved(i,J) = vhtr_resolved(i,J,k)
         endif
         CFL(i) = - vhh(i,J) / hprev(i,j+1,k)  ! CFL is positive
       else
@@ -939,9 +1083,13 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         if ((((hup - hlos) - vhr(i,J,k)) < 0.0) .and. &
             ((0.5*hup - vhr(i,J,k)) < 0.0)) then
           vhh(i,J) = MAX(0.5*hup, hup-hlos, 0.0)
+          if (use_resolved_flux) &
+              vhh_resolved(i,J) = MAX(0.5*hup, hup-hlos, 0.0)
           domore_v(J,k) = .true.
         else
           vhh(i,J) = vhr(i,J,k)
+          if (use_resolved_flux) &
+              vhh_resolved(i,J) = vhtr_resolved(i,J,k)
         endif
         CFL(i) = vhh(i,J) / hprev(i,j,k)  ! CFL is positive
       endif
@@ -985,9 +1133,15 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
           if (vhh(i,J) >= 0.0) then
             flux_y(i,m,J) = vhh(i,J)*( aR - 0.5 * CFL(i) * ( &
                  ( aR - aL ) - a6 * ( 1. - 2./3. * CFL(I) ) ) )
+            if (use_resolved_flux) &
+                 flux_y_resolved(i,m,J) = vhh_resolved(i,J)*( aR - 0.5 * CFL(i) * ( &
+                   ( aR - aL ) - a6 * ( 1. - 2./3. * CFL(I) ) ) )
           else
             flux_y(i,m,J) = vhh(i,J)*( aL + 0.5 * CFL(i) * ( &
                  ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
+            if (use_resolved_flux) &
+                 flux_y_resolved(i,m,J) = vhh_resolved(i,J)*( aL + 0.5 * CFL(i) * ( &
+                   ( aR - aL ) + a6 * ( 1. - 2./3. * CFL(I) ) ) )
           endif
         enddo
       else ! PLM
@@ -1000,6 +1154,8 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
             ! Alternative implementation of PLM
             Tc = T_tmp(i,m,j)
             flux_y(i,m,J) = vhh(i,J)*( Tc + 0.5 * slope_y(i,m,j) * ( 1. - CFL(i) ) )
+            if (use_resolved_flux) &
+                 flux_y_resolved(i,m,J) = vhh_resolved(i,J)*( Tc + 0.5 * slope_y(i,m,j) * ( 1. - CFL(i) ) )
           else
             ! Indirect implementation of PLM
             !aL = Tr(m)%t(i,j+1,k) - 0.5 * slope_y(i,m,j+1)
@@ -1008,6 +1164,8 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
             ! Alternative implementation of PLM
             Tc = T_tmp(i,m,j+1)
             flux_y(i,m,J) = vhh(i,J)*( Tc - 0.5 * slope_y(i,m,j+1) * ( 1. - CFL(i) ) )
+            if (use_resolved_flux) &
+                 flux_y_resolved(i,m,J) = vhh_resolved(i,J)*( Tc - 0.5 * slope_y(i,m,j+1) * ( 1. - CFL(i) ) )
           endif
         enddo
       endif ! usePPM
@@ -1027,12 +1185,18 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
                 if ((vhr(i,J,k) > 0.0) .and. (segment%direction == OBC_DIRECTION_S) .or. &
                     (vhr(i,J,k) < 0.0) .and. (segment%direction == OBC_DIRECTION_N)) then
                   vhh(i,J) = vhr(i,J,k)
+                  if (use_resolved_flux) &
+                      vhh_resolved(i,J) = vhtr_resolved(i,J,k)
                   do m=1,segment%tr_Reg%ntseg
                     ntr_id = segment%tr_reg%Tr(m)%ntr_index
                     if (allocated(segment%tr_Reg%Tr(m)%tres)) then
                       flux_y(i,ntr_id,J) = vhh(i,J)*OBC%segment(n)%tr_Reg%Tr(m)%tres(i,J,k)
+                      if (use_resolved_flux) &
+                          flux_y_resolved(i,ntr_id,J) = vhh_resolved(i,J)*OBC%segment(n)%tr_Reg%Tr(m)%tres(i,J,k)
                     else
                       flux_y(i,ntr_id,J) = vhh(i,J)*OBC%segment(n)%tr_Reg%Tr(m)%OBC_inflow_conc
+                      if (use_resolved_flux) &
+                          flux_y_resolved(i,ntr_id,J) = vhh_resolved(i,J)*OBC%segment(n)%tr_Reg%Tr(m)%OBC_inflow_conc
                     endif
                   enddo
                 endif
@@ -1053,11 +1217,19 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
               if ((vhr(i,J,k) > 0.0) .and. (G%mask2dT(i,j) < 0.5) .or. &
                   (vhr(i,J,k) < 0.0) .and. (G%mask2dT(i,j+1) < 0.5)) then
                 vhh(i,J) = vhr(i,J,k)
+                if (use_resolved_flux) &
+                    vhh_resolved(i,J) = vhtr_resolved(i,J,k)
                 do m=1,segment%tr_Reg%ntseg
                   ntr_id = segment%tr_reg%Tr(m)%ntr_index
                   if (allocated(segment%tr_Reg%Tr(m)%tres)) then
                     flux_y(i,ntr_id,J) = vhh(i,J)*segment%tr_Reg%Tr(m)%tres(i,J,k)
-                  else ; flux_y(i,ntr_id,J) = vhh(i,J)*segment%tr_Reg%Tr(m)%OBC_inflow_conc ; endif
+                    if (use_resolved_flux) &
+                        flux_y_resolved(i,ntr_id,J) = vhh_resolved(i,J)*segment%tr_Reg%Tr(m)%tres(i,J,k)
+                  else
+                    flux_y(i,ntr_id,J) = vhh(i,J)*segment%tr_Reg%Tr(m)%OBC_inflow_conc
+                    if (use_resolved_flux) &
+                        flux_y_resolved(i,ntr_id,J) = vhh_resolved(i,J)*segment%tr_Reg%Tr(m)%OBC_inflow_conc
+                  endif
                 enddo
               endif
             enddo
@@ -1067,8 +1239,16 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
     endif ; endif
 
   else ! not domore_v.
-    do i=is,ie ; vhh(i,J) = 0.0 ; enddo
-    do m=1,ntr ; do i=is,ie ; flux_y(i,m,J) = 0.0 ; enddo ; enddo
+    do i=is,ie
+      vhh(i,J) = 0.0
+      if (use_resolved_flux) &
+          vhh_resolved(i,J) = 0.0
+    enddo
+    do m=1,ntr ; do i=is,ie
+       flux_y(i,m,J) = 0.0
+       if (use_resolved_flux) &
+           flux_y_resolved(i,m,J) = 0.0
+    enddo ; enddo
   endif ; enddo ! End of j-loop
 
   do J=js-1,je ; do i=is,ie
@@ -1120,6 +1300,16 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
         endif ; enddo
       endif
 
+      ! diagnose convergence of flux_y_resolved and add to convergence of flux_x_resolved.
+      ! division by areaT to get into W/m2 for heat and kg/(s*m2) for salt.
+      if (associated(Tr(m)%advection_xy_resolved)) then
+        do i=is,ie ; if (do_i(i,j)) then
+          Tr(m)%advection_xy_resolved(i,j,k) = Tr(m)%advection_xy_resolved(i,j,k) - &
+                                          (flux_y_resolved(i,m,J) - flux_y_resolved(i,m,J-1))* Idt * &
+                                          G%IareaT(i,j)
+        endif ; enddo
+      endif
+
     enddo
   endif ; enddo ! End of j-loop.
 
@@ -1144,6 +1334,22 @@ subroutine advect_y(Tr, hprev, vhr, vh_neglect, OBC, domore_v, ntr, Idt, &
     do J=js-1,je ; if (domore_v_initial(J)) then
       do i=is,ie ; if (do_i(i,j) .or. do_i(i,j+1)) then
         Tr(m)%ad2d_y(i,J) = Tr(m)%ad2d_y(i,J) + flux_y(i,m,J)*Idt
+      endif ; enddo
+    endif ; enddo
+  endif ; enddo ! End of m-loop.
+
+  do m=1,ntr ; if (associated(Tr(m)%ad_y_resolved)) then
+    do J=js-1,je ; if (domore_v_initial(J)) then
+      do i=is,ie ; if (do_i(i,j) .or. do_i(i,j+1)) then
+        Tr(m)%ad_y_resolved(i,J,k) = Tr(m)%ad_y_resolved(i,J,k) + flux_y_resolved(i,m,J)*Idt
+      endif ; enddo
+    endif ; enddo
+  endif ; enddo ! End of m-loop.
+
+  do m=1,ntr ; if (associated(Tr(m)%ad2d_y_resolved)) then
+    do J=js-1,je ; if (domore_v_initial(J)) then
+      do i=is,ie ; if (do_i(i,j) .or. do_i(i,j+1)) then
+        Tr(m)%ad2d_y_resolved(i,J) = Tr(m)%ad2d_y_resolved(i,J) + flux_y_resolved(i,m,J)*Idt
       endif ; enddo
     endif ; enddo
   endif ; enddo ! End of m-loop.
