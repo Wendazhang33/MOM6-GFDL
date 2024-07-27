@@ -659,7 +659,9 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
   !$OMP   is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, &
   !$OMP   is_vort, ie_vort, js_vort, je_vort, &
   !$OMP   is_Kh, ie_Kh, js_Kh, je_Kh, &
-  !$OMP   apply_OBC, rescale_Kh, legacy_bound, find_FrictWork, &
+  !$OMP   apply_OBC, rescale_Kh, legacy_bound, find_FrictWork, EY24_EBT_BS, &
+  !$OMP   BS_coeff_h, visc_limit_h, visc_limit_q, visc_limit_h_flag, visc_limit_q_flag, &
+  !$OMP   visc_limit_h_frac, visc_limit_q_frac, &
   !$OMP   use_MEKE_Ku, use_MEKE_Au, u_smooth, v_smooth, use_cont_huv, slope_x, slope_y, dz, &
   !$OMP   backscat_subround, GME_effic_h, GME_effic_q, &
   !$OMP   h_neglect, h_neglect3, inv_PI3, inv_PI6, &
@@ -678,7 +680,7 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
   !$OMP   sh_xx_sq, sh_xy_sq, meke_res_fn, Shear_mag, Shear_mag_bc, vert_vort_mag, &
   !$OMP   h_min, hrat_min, visc_bound_rem, Kh_max_here, &
   !$OMP   grid_Ah, grid_Kh, d_Del2u, d_Del2v, d_str, &
-  !$OMP   Kh, Ah, AhSm, AhLth, local_strain, Sh_F_pow, &
+  !$OMP   Kh, Kh_BS, Ah, AhSm, AhLth, local_strain, Sh_F_pow, tmp, &
   !$OMP   dDel2vdx, dDel2udy, Del2vort_q, Del2vort_h, KE, &
   !$OMP   h2uq, h2vq, hu, hv, hq, FatH, RoScl, GME_coeff, &
   !$OMP   dudx_smooth, dudy_smooth, dvdx_smooth, dvdy_smooth, &
