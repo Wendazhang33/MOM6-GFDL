@@ -249,6 +249,9 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, use_stan
   !$OMP                                  drho_dT_dT_h,scrap,pres_h,T_h,S_h,GxSpV_u, &
   !$OMP                                  haB,haL,haR,dzaL,dzaR,wtA,wtB,wtL,wtR,drdz,  &
   !$OMP                                  drdx,mag_grad2,slope,l_seg)
+  if (present_N2_u .or. (present(dzSxN))) then
+    GxSpV_u(:) = G_Rho0
+  endif
   do j=js,je ; do K=nz,2,-1
     if (.not.(use_EOS)) then
       drdiA = 0.0 ; drdiB = 0.0
@@ -269,10 +272,6 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, use_stan
           do I=is-1,ie
             GxSpV_u(I) = GV%g_Earth *  0.25* ((tv%SpV_avg(i,j,k) + tv%SpV_avg(i+1,j,k)) + &
                                               (tv%SpV_avg(i,j,k-1) + tv%SpV_avg(i+1,j,k-1)))
-          enddo
-        else
-          do I=is-1,ie
-            GxSpV_u(I) = G_Rho0
           enddo
         endif
       endif
@@ -395,6 +394,9 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, use_stan
   !$OMP                                  drho_dT_dT_hr,pres_hr,T_hr,S_hr,             &
   !$OMP                                  haB,haL,haR,dzaL,dzaR,wtA,wtB,wtL,wtR,drdz,  &
   !$OMP                                  drdy,mag_grad2,slope,l_seg)
+  if ((present_N2_v) .or. (present(dzSyN))) then
+    GxSpV_v(:) = G_Rho0
+  endif
   do J=js-1,je ; do K=nz,2,-1
     if (.not.(use_EOS)) then
       drdjA = 0.0 ; drdjB = 0.0
@@ -415,10 +417,6 @@ subroutine calc_isoneutral_slopes(G, GV, US, h, e, tv, dt_kappa_smooth, use_stan
           do i=is,ie
             GxSpV_v(i) = GV%g_Earth *  0.25* ((tv%SpV_avg(i,j,k) + tv%SpV_avg(i,j+1,k)) + &
                                               (tv%SpV_avg(i,j,k-1) + tv%SpV_avg(i,j+1,k-1)))
-          enddo
-        else
-          do i=is,ie
-            GxSpV_v(i) = G_Rho0
           enddo
         endif
       endif
