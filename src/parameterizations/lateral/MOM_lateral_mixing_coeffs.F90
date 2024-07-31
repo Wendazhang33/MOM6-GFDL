@@ -1530,7 +1530,7 @@ subroutine VarMix_init(Time, G, GV, US, param_file, diag, CS)
   CS%id_BS_struct = register_diag_field('ocean_model', 'BS_struct', diag%axesTl, Time, &
             'Vertical structure of backscatter', 'nondim')
 
-  if (CS%calculate_Eady_growth_rate .and. CS%use_stored_slopes) then
+  if ((CS%calculate_Eady_growth_rate .and. CS%use_stored_slopes) .or. (CS%sqg_expo>0.0)) then
     CS%id_N2_u = register_diag_field('ocean_model', 'N2_u', diag%axesCui, Time, &
          'Square of Brunt-Vaisala frequency, N^2, at u-points, as used in Visbeck et al.', &
          's-2', conversion=(US%L_to_Z*US%s_to_T)**2)
