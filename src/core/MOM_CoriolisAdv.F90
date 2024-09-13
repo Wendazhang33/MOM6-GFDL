@@ -97,12 +97,18 @@ integer, parameter :: ROBUST_ENSTRO     = 3
 integer, parameter :: SADOURNY75_ENSTRO = 4
 integer, parameter :: ARAKAWA_LAMB81    = 5
 integer, parameter :: AL_BLEND          = 6
+integer, parameter :: SECOND_ENSTRO = 7
+integer, parameter :: THIRD_ENSTRO = 8
+integer, parameter :: wenovi_ENSTRO = 9
 character*(20), parameter :: SADOURNY75_ENERGY_STRING = "SADOURNY75_ENERGY"
 character*(20), parameter :: ARAKAWA_HSU_STRING = "ARAKAWA_HSU90"
 character*(20), parameter :: ROBUST_ENSTRO_STRING = "ROBUST_ENSTRO"
 character*(20), parameter :: SADOURNY75_ENSTRO_STRING = "SADOURNY75_ENSTRO"
 character*(20), parameter :: ARAKAWA_LAMB_STRING = "ARAKAWA_LAMB81"
 character*(20), parameter :: AL_BLEND_STRING = "ARAKAWA_LAMB_BLEND"
+character*(20), parameter :: SECOND_ENSTRO_STRING = "SECOND_ENSTRO"
+character*(20), parameter :: THIRD_ENSTRO_STRING = "THIRD_ENSTRO"
+character*(20), parameter :: WENOVI_ENSTRO_STRING = "WENOVI_ENSTRO"
 !>@}
 !>@{ Enumeration values for KE_Scheme
 integer, parameter :: KE_ARAKAWA        = 10
@@ -227,6 +233,8 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   real :: QUHeff,QVHeff ! More temporary variables [H L2 T-2 ~> m3 s-2 or kg s-2].
   integer :: i, j, k, n, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   logical :: Stokes_VF
+  real :: u_v, v_u, q_v, q_u ! u_v is the u velocity at v point, v_u is the v velocity at u point 
+  real :: abs_vort_u, abs_vort_v  ! absolute vorticity at u and v points
 
 ! To work, the following fields must be set outside of the usual
 ! is to ie range before this subroutine is called:
@@ -676,6 +684,15 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         CAu(I,j,k) = 0.125 * (G%IdxCu(I,j) * (q(I,J) + q(I,J-1))) * &
                      ((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
       enddo ; enddo
+    elseif (CS%Coriolis_Scheme == wenovi_ENSTRO) then
+      do j=js,je ; do I=Isq,Ieq    
+!        v_u = G%IdxCu(I,j) * (vh(i+1,J,k) + vh(i,J,k) + vh(i,J-1,k) + vh(i+1,J-1,k))*0.125 
+!        call weno_face_reconstruction(q(I,J-3),q(I,J-2),q(I,J-1),q(I,J),q(I,J+1),q(I,J+2),v_u,q_u)
+        v_u = (v(i+1,J,k) + v(i,J,k) + v(i,J-1,k) + v(i+1,J-1,k))*0.125
+        call weno_face_reconstruction(abs_vort(I,J-3),abs_vort(I,J-2), &
+                abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1),abs_vort(I,J+2),v_u,q_u) 
+        CAu(I,j,k) = (q_u * v_u)
+      enddo ; enddo            
     elseif ((CS%Coriolis_Scheme == ARAKAWA_HSU90) .or. &
             (CS%Coriolis_Scheme == ARAKAWA_LAMB81) .or. &
             (CS%Coriolis_Scheme == AL_BLEND)) then
@@ -711,6 +728,21 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
                        - ((abs_vort(I,J)-abs_vort(I,J-1))*abs(VHeff)) )
           CAu(I,j,k) = (QVHeff / ( h_tiny + ((Heff1+Heff4) + (Heff2+Heff3)) ) ) * G%IdxCu(I,j)
         endif
+      enddo ; enddo
+    elseif (CS%Coriolis_Scheme == SECOND_ENSTRO) then
+      do j=js,je ; do I=Isq,Ieq
+        CAu(I,j,k) = 0.125 * ((abs_vort(I,J) + abs_vort(I,J-1))) * &
+                     ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
+      enddo ; enddo
+    elseif (CS%Coriolis_Scheme == THIRD_ENSTRO) then
+      do j=js,je ; do I=Isq,Ieq
+        v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
+        if (v_u>0.) then
+          abs_vort_u = (-abs_vort(I,J-2) + 5*abs_vort(I,J-1) + 2*abs_vort(I,J))/6.
+        else
+          abs_vort_u = (2*abs_vort(I,J-1) + 5*abs_vort(I,J) - abs_vort(I,J+1))/6.
+        endif  
+        CAu(I,j,k) = abs_vort_u * v_u
       enddo ; enddo
     endif
     ! Add in the additional terms with Arakawa & Lamb.
@@ -795,6 +827,15 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         CAv(i,J,k) = -0.125 * (G%IdyCv(i,J) * (q(I-1,J) + q(I,J))) * &
                      ((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
       enddo ; enddo
+    elseif (CS%Coriolis_Scheme == wenovi_ENSTRO) then
+      do J=Jsq,Jeq ; do i=is,ie
+!        u_v = G%IdyCv(i,J) * (uh(I-1,j,k) + uh(I-1,j+1,k) + uh(I,j,k) + uh(I,j+1,k)) * 0.125
+!        call weno_face_reconstruction(q(I-3,J),q(I-2,J),q(I-1,J),q(I,J),q(I+1,J),q(I+2,J),u_v,q_v)
+        u_v = (u(I-1,j,k) + u(I-1,j+1,k) + u(I,j,k) + u(I,j+1,k)) * 0.125
+        call weno_face_reconstruction(abs_vort(I-3,J),abs_vort(I-2,J),&
+                abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J),abs_vort(I+2,J),u_v,q_v)
+        CAv(i,J,k) = - (q_v * u_v)
+      enddo ; enddo
     elseif ((CS%Coriolis_Scheme == ARAKAWA_HSU90) .or. &
             (CS%Coriolis_Scheme == ARAKAWA_LAMB81) .or. &
             (CS%Coriolis_Scheme == AL_BLEND)) then
@@ -835,6 +876,21 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
           CAv(i,J,k) = - QUHeff / &
                        (h_tiny + ((Heff1+Heff4) +(Heff2+Heff3)) ) * G%IdyCv(i,J)
         endif
+      enddo ; enddo
+    elseif (CS%Coriolis_Scheme == SECOND_ENSTRO) then
+      do J=Jsq,Jeq ; do i=is,ie
+        CAv(i,J,k) = -0.125 * ((abs_vort(I-1,J) + abs_vort(I,J))) * &
+                     ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
+      enddo ; enddo
+    elseif (CS%Coriolis_Scheme == THIRD_ENSTRO) then
+      do J=Jsq,Jeq ; do i=is,ie
+        u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
+        if (u_v>0.) then
+          abs_vort_v = (-abs_vort(I-2,J) + 5*abs_vort(I-1,J) + 2*abs_vort(I,J))/6.
+        else
+          abs_vort_v = (2*abs_vort(I-1,J) + 5*abs_vort(I,J) - abs_vort(I+1,J))/6.
+        endif  
+        CAv(i,J,k) = -abs_vort_v * u_v
       enddo ; enddo
     endif
     ! Add in the additonal terms with Arakawa & Lamb.
@@ -964,6 +1020,92 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 
 end subroutine CorAdCalc
 
+subroutine weno_face_reconstruction(q1, q2, q3, q4, q5, q6, u, qr)
+  real, intent(in) ::  q1, q2, q3, q4, q5, q6
+  real, intent(in) :: u
+  real, intent(inout) :: qr
+  real  :: c0, c1, c2
+  real  :: b0, b1, b2
+  real :: tau, w0, w1, w2
+  real :: s
+
+  if (u>0.) then
+    call reconstruct0(q3, q4, q5, c0)
+    call reconstruct1(q2, q3, q4, c1) 
+    call reconstruct2(q1, q2, q3, c2)
+    call weight0(q3, q4, q5, b0)
+    call weight1(q2, q3, q4, b1)
+    call weight2(q1, q2, q3, b2)
+  else
+    call reconstruct0(q4, q3, q2, c0)
+    call reconstruct1(q5, q4, q3, c1)
+    call reconstruct2(q6, q5, q4, c2)
+    call weight0(q4, q3, q2, b0)
+    call weight1(q5, q4, q3, b1)
+    call weight2(q6, q5, q4, b2)
+  endif
+
+  tau = abs(b0-b2)
+  w0  = 3./10 * (1 + (tau / (b0 + 1e-8))**2)
+  w1  = 3./5  * (1 + (tau / (b1 + 1e-8))**2)
+  w2  = 1./10 * (1 + (tau / (b2 + 1e-8))**2)
+
+  s = 1 / (w0 + w1 + w2)
+  w0 = w0 * s
+  w1 = w1 * s
+  w2 = w2 * s
+
+  qr = w0 * c0 + w1 * c1 + w2 * c2
+
+end subroutine weno_face_reconstruction
+
+subroutine weight0(q0, q1, q2, w0)
+  real, intent(in) :: q0,q1,q2
+  real, intent(inout) :: w0
+
+  w0 = 13/12 * (q0 - 2*q1 + q2)**2 + 0.25 * (3*q0 - 4*q1 + q2)**2
+
+end subroutine weight0
+
+subroutine weight1(q0, q1, q2, w1)
+  real, intent(in) :: q0,q1,q2
+  real, intent(inout) :: w1
+
+  w1 = 13/12 * (q0 - 2*q1 + q2)**2 + 0.25 * (q0 - q2)**2
+
+end subroutine weight1
+
+subroutine weight2(q0, q1, q2, w2)
+  real, intent(in) :: q0, q1, q2
+  real, intent(inout) :: w2
+
+  w2 = 13/12 * (q0 - 2*q1 + q2)**2 + 0.25 * (q0 - 4*q1 + 3*q2)**2
+
+end subroutine weight2
+
+subroutine reconstruct0(q0, q1, q2, p0)
+  real, intent(in) :: q0,q1,q2
+  real, intent(inout) :: p0
+
+  p0 = (2*q0 + 5*q1 - q2)/6.
+
+end subroutine reconstruct0
+
+subroutine reconstruct1(q0, q1, q2, p1)
+  real, intent(in) :: q0,q1,q2
+  real, intent(inout) :: p1
+
+  p1 = (-q0 + 5*q1 + 2*q2)/6.
+
+end subroutine reconstruct1
+
+subroutine reconstruct2(q0, q1, q2, p2)
+  real, intent(in) :: q0,q1,q2
+  real, intent(inout) :: p2
+
+  p2 = (2*q0 - 7*q1 + 11*q2)/6.
+
+end subroutine reconstruct2
 
 !> Calculates the acceleration due to the gradient of kinetic energy.
 subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
@@ -1100,7 +1242,10 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
                  "\t SADOURNY75_ENSTRO - Sadourny, 1975; enstrophy cons. \n"//&
                  "\t ARAKAWA_LAMB81    - Arakawa & Lamb, 1981; En. + Enst.\n"//&
                  "\t ARAKAWA_LAMB_BLEND - A blend of Arakawa & Lamb with \n"//&
-                 "\t                      Arakawa & Hsu and Sadourny energy", &
+                 "\t                      Arakawa & Hsu and Sadourny energy \n"//&
+                 "\t SECOND_ENSTRO - 2nd-order enstrophy cons. \n"//&
+                 "\t THIRD_ENSTRO - 3rd-order enstrophy cons. \n"//&
+                 "\t WENOVI_ENSTRO - 3rd-order enstrophy cons.",&
                  default=SADOURNY75_ENERGY_STRING)
   tmpstr = uppercase(tmpstr)
   select case (tmpstr)
@@ -1117,6 +1262,12 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
     case (ROBUST_ENSTRO_STRING)
       CS%Coriolis_Scheme = ROBUST_ENSTRO
       CS%Coriolis_En_Dis = .false.
+    case (SECOND_ENSTRO_STRING)
+      CS%Coriolis_Scheme = SECOND_ENSTRO
+    case (THIRD_ENSTRO_STRING)
+      CS%Coriolis_Scheme = THIRD_ENSTRO
+    case (WENOVI_ENSTRO_STRING)
+      CS%Coriolis_Scheme = wenovi_ENSTRO      
     case default
       call MOM_mesg('CoriolisAdv_init: Coriolis_Scheme ="'//trim(tmpstr)//'"', 0)
       call MOM_error(FATAL, "CoriolisAdv_init: Unrecognized setting "// &
