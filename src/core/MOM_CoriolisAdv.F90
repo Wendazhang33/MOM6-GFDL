@@ -686,11 +686,11 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == wenovi_ENSTRO) then
       do j=js,je ; do I=Isq,Ieq    
-!        v_u = G%IdxCu(I,j) * (vh(i+1,J,k) + vh(i,J,k) + vh(i,J-1,k) + vh(i+1,J-1,k))*0.125 
-!        call weno_face_reconstruction(q(I,J-3),q(I,J-2),q(I,J-1),q(I,J),q(I,J+1),q(I,J+2),v_u,q_u)
-        v_u = (v(i+1,J,k) + v(i,J,k) + v(i,J-1,k) + v(i+1,J-1,k))*0.125
-        call weno_face_reconstruction(abs_vort(I,J-3),abs_vort(I,J-2), &
-                abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1),abs_vort(I,J+2),v_u,q_u) 
+        v_u = G%IdxCu(I,j) * (vh(i+1,J,k) + vh(i,J,k) + vh(i,J-1,k) + vh(i+1,J-1,k))*0.125 
+        call weno_face_reconstruction(q(I,J-3),q(I,J-2),q(I,J-1),q(I,J),q(I,J+1),q(I,J+2),v_u,q_u)
+!        v_u = (v(i+1,J,k) + v(i,J,k) + v(i,J-1,k) + v(i+1,J-1,k))*0.125
+!        call weno_face_reconstruction(abs_vort(I,J-3),abs_vort(I,J-2), &
+!                abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1),abs_vort(I,J+2),v_u,q_u) 
         CAu(I,j,k) = (q_u * v_u)
       enddo ; enddo            
     elseif ((CS%Coriolis_Scheme == ARAKAWA_HSU90) .or. &
@@ -829,11 +829,11 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == wenovi_ENSTRO) then
       do J=Jsq,Jeq ; do i=is,ie
-!        u_v = G%IdyCv(i,J) * (uh(I-1,j,k) + uh(I-1,j+1,k) + uh(I,j,k) + uh(I,j+1,k)) * 0.125
-!        call weno_face_reconstruction(q(I-3,J),q(I-2,J),q(I-1,J),q(I,J),q(I+1,J),q(I+2,J),u_v,q_v)
-        u_v = (u(I-1,j,k) + u(I-1,j+1,k) + u(I,j,k) + u(I,j+1,k)) * 0.125
-        call weno_face_reconstruction(abs_vort(I-3,J),abs_vort(I-2,J),&
-                abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J),abs_vort(I+2,J),u_v,q_v)
+        u_v = G%IdyCv(i,J) * (uh(I-1,j,k) + uh(I-1,j+1,k) + uh(I,j,k) + uh(I,j+1,k)) * 0.125
+        call weno_face_reconstruction(q(I-3,J),q(I-2,J),q(I-1,J),q(I,J),q(I+1,J),q(I+2,J),u_v,q_v)
+!        u_v = (u(I-1,j,k) + u(I-1,j+1,k) + u(I,j,k) + u(I,j+1,k)) * 0.125
+!        call weno_face_reconstruction(abs_vort(I-3,J),abs_vort(I-2,J),&
+!                abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J),abs_vort(I+2,J),u_v,q_v)
         CAv(i,J,k) = - (q_v * u_v)
       enddo ; enddo
     elseif ((CS%Coriolis_Scheme == ARAKAWA_HSU90) .or. &
