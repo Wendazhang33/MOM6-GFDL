@@ -703,7 +703,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
       enddo ; enddo            
     elseif (CS%Coriolis_Scheme == wenovi_5th_ENSTRO) then
       do j=js,je ; do I=Isq,Ieq
-        v_u = 0.125 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
+        v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
 
         v_q2 = (v(i+1,J-3,k) + v(i,J-3,k)) * 0.5
         v_q3 = (v(i+1,J-2,k) + v(i,J-2,k)) * 0.5
@@ -830,7 +830,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == wenovi_5th_ENSTRO) then
       do J=Jsq,Jeq ; do i=is,ie
-        u_v = 0.125* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
+        u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
 
         u_q2 = (u(I-3,j+1,k) + u(I-3,j,k)) * 0.5
         u_q3 = (u(I-2,j+1,k) + u(I-2,j,k)) * 0.5
