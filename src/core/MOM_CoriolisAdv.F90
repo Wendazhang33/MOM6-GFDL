@@ -73,6 +73,7 @@ type, public :: CoriolisAdv_CS ; private
                              !! relative to the other one is used.  This is only
                              !! available at present if Coriolis scheme is
                              !! SADOURNY75_ENERGY.
+  logical :: weno_velocity_smooth !! If true, use velocity to compute the weighting for WENO
   type(time_type), pointer :: Time !< A pointer to the ocean model's clock.
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the timing of diagnostic output.
   !>@{ Diagnostic IDs
@@ -99,7 +100,8 @@ integer, parameter :: ARAKAWA_LAMB81    = 5
 integer, parameter :: AL_BLEND          = 6
 integer, parameter :: SECOND_ENSTRO = 7
 integer, parameter :: THIRD_ENSTRO = 8
-integer, parameter :: wenovi_ENSTRO = 9
+integer, parameter :: wenovi_7th_ENSTRO = 9
+integer, parameter :: wenovi_5th_ENSTRO = 15
 character*(20), parameter :: SADOURNY75_ENERGY_STRING = "SADOURNY75_ENERGY"
 character*(20), parameter :: ARAKAWA_HSU_STRING = "ARAKAWA_HSU90"
 character*(20), parameter :: ROBUST_ENSTRO_STRING = "ROBUST_ENSTRO"
@@ -108,7 +110,8 @@ character*(20), parameter :: ARAKAWA_LAMB_STRING = "ARAKAWA_LAMB81"
 character*(20), parameter :: AL_BLEND_STRING = "ARAKAWA_LAMB_BLEND"
 character*(20), parameter :: SECOND_ENSTRO_STRING = "SECOND_ENSTRO"
 character*(20), parameter :: THIRD_ENSTRO_STRING = "THIRD_ENSTRO"
-character*(20), parameter :: WENOVI_ENSTRO_STRING = "WENOVI_ENSTRO"
+character*(20), parameter :: WENOVI_5TH_ENSTRO_STRING = "WENOVI_5TH_ENSTRO"
+character*(20), parameter :: WENOVI_7TH_ENSTRO_STRING = "WENOVI_7TH_ENSTRO"
 !>@}
 !>@{ Enumeration values for KE_Scheme
 integer, parameter :: KE_ARAKAWA        = 10
@@ -195,8 +198,8 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   real, dimension(SZIB_(G),SZJB_(G),SZK_(GV)) :: &
     PV, &       ! A diagnostic array of the potential vorticities [H-1 T-1 ~> m-1 s-1 or m2 kg-1 s-1].
     RV          ! A diagnostic array of the relative vorticities [T-1 ~> s-1].
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(G)) :: CAuS ! Stokes contribution to CAu [L T-2 ~> m s-2]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(G)) :: CAvS ! Stokes contribution to CAv [L T-2 ~> m s-2]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)) :: CAuS ! Stokes contribution to CAu [L T-2 ~> m s-2]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)) :: CAvS ! Stokes contribution to CAv [L T-2 ~> m s-2]
   real :: fv1, fv2, fv3, fv4   ! (f+rv)*v at the 4 points surrounding a u points[L T-2 ~> m s-2]
   real :: fu1, fu2, fu3, fu4   ! -(f+rv)*u at the 4 points surrounding a v point [L T-2 ~> m s-2]
   real :: max_fv, max_fu       ! The maximum of the neighboring Coriolis accelerations [L T-2 ~> m s-2]
@@ -232,9 +235,13 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   real :: UHeff, VHeff  ! More temporary variables [H L2 T-1 ~> m3 s-1 or kg s-1].
   real :: QUHeff,QVHeff ! More temporary variables [H L2 T-2 ~> m3 s-2 or kg s-2].
   integer :: i, j, k, n, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
+  integer :: seventh_order, fifth_order, third_order, second_order ! Order of accuracy for the WENO calculations
   logical :: Stokes_VF
   real :: u_v, v_u, q_v, q_u ! u_v is the u velocity at v point, v_u is the v velocity at u point 
+  real :: u_q1, u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_q8 ! is the v velocity at q points
+  real :: v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8 ! is the u velocity at q points
   real :: abs_vort_u, abs_vort_v  ! absolute vorticity at u and v points
+  real :: f_u, f_v      ! Coriolis coefficient at u and v points
 
 ! To work, the following fields must be set outside of the usual
 ! is to ie range before this subroutine is called:
@@ -649,118 +656,101 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
     ! Calculate the tendencies of zonal velocity due to the Coriolis
     ! force and momentum advection.  On a Cartesian grid, this is
     !     CAu =  q * vh - d(KE)/dx.
-    if (CS%Coriolis_Scheme == SADOURNY75_ENERGY) then
-      if (CS%Coriolis_En_Dis) then
-        ! Energy dissipating biased scheme, Hallberg 200x
-        do j=js,je ; do I=Isq,Ieq
-          if (q(I,J)*u(I,j,k) == 0.0) then
-            temp1 = q(I,J) * ( (vh_max(i,j)+vh_max(i+1,j)) &
-                             + (vh_min(i,j)+vh_min(i+1,j)) )*0.5
-          elseif (q(I,J)*u(I,j,k) < 0.0) then
-            temp1 = q(I,J) * (vh_max(i,j)+vh_max(i+1,j))
-          else
-            temp1 = q(I,J) * (vh_min(i,j)+vh_min(i+1,j))
-          endif
-          if (q(I,J-1)*u(I,j,k) == 0.0) then
-            temp2 = q(I,J-1) * ( (vh_max(i,j-1)+vh_max(i+1,j-1)) &
-                               + (vh_min(i,j-1)+vh_min(i+1,j-1)) )*0.5
-          elseif (q(I,J-1)*u(I,j,k) < 0.0) then
-            temp2 = q(I,J-1) * (vh_max(i,j-1)+vh_max(i+1,j-1))
-          else
-            temp2 = q(I,J-1) * (vh_min(i,j-1)+vh_min(i+1,j-1))
-          endif
-          CAu(I,j,k) = 0.25 * G%IdxCu(I,j) * (temp1 + temp2)
-        enddo ; enddo
-      else
-        ! Energy conserving scheme, Sadourny 1975
-        do j=js,je ; do I=Isq,Ieq
-          CAu(I,j,k) = 0.25 * &
-            ((q(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
-             (q(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k)))) * G%IdxCu(I,j)
-        enddo ; enddo
-      endif
-    elseif (CS%Coriolis_Scheme == SADOURNY75_ENSTRO) then
-      do j=js,je ; do I=Isq,Ieq
-        CAu(I,j,k) = 0.125 * (G%IdxCu(I,j) * (q(I,J) + q(I,J-1))) * &
-                     ((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
-      enddo ; enddo
-    elseif (CS%Coriolis_Scheme == wenovi_ENSTRO) then
+    if (CS%Coriolis_Scheme == wenovi_7th_ENSTRO) then
       do j=js,je ; do I=Isq,Ieq    
-        v_u = G%IdxCu(I,j) * (vh(i+1,J,k) + vh(i,J,k) + vh(i,J-1,k) + vh(i+1,J-1,k))*0.125 
-        call weno_face_reconstruction(q(I,J-3),q(I,J-2),q(I,J-1),q(I,J),q(I,J+1),q(I,J+2),v_u,q_u)
-!        v_u = (v(i+1,J,k) + v(i,J,k) + v(i,J-1,k) + v(i+1,J-1,k))*0.125
-!        call weno_face_reconstruction(abs_vort(I,J-3),abs_vort(I,J-2), &
-!                abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1),abs_vort(I,J+2),v_u,q_u) 
+        v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
+
+        v_q1 = (v(i+1,J-4,k) + v(i,J-4,k)) * 0.5
+        v_q2 = (v(i+1,J-3,k) + v(i,J-3,k)) * 0.5
+        v_q3 = (v(i+1,J-2,k) + v(i,J-2,k)) * 0.5
+        v_q4 = (v(i+1,J-1,k) + v(i,J-1,k)) * 0.5
+        v_q5 = (v(i+1,J  ,k) + v(i,J  ,k)) * 0.5
+        v_q6 = (v(i+1,J+1,k) + v(i,J+1,k)) * 0.5
+        v_q7 = (v(i+1,J+2,k) + v(i,J+2,k)) * 0.5
+        v_q8 = (v(i+1,J+3,k) + v(i,J+3,k)) * 0.5
+        
+        third_order = (G%mask2dCv(i+1,J-2) * G%mask2dCv(i+1,J-1) * G%mask2dCv(i+1,J) * G%mask2dCv(i+1,J+1) * & 
+                       G%mask2dCv(i,J-2)   * G%mask2dCv(i,J-1)   * G%mask2dCv(i,J)   * G%mask2dCv(i,J+1))
+
+        fifth_order   = third_order * G%mask2dCv(i+1,J-3) * G%mask2dCv(i,J-3) * G%mask2dCv(i+1,J+2) * G%mask2dCv(i,J+2)
+        seventh_order = fifth_order * G%mask2dCv(i+1,J-4) * G%mask2dCv(i,J-4) * G%mask2dCv(i+1,J+3) * G%mask2dCv(i,J+3)
+
+        ! compute the masking to make sure that inland values are not used
+        if (seventh_order == 1) then
+            ! all values are valid, we use seventh order reconstruction
+            call weno_seven_reconstruction(abs_vort(I,J-4),abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), & 
+                                           abs_vort(I,J)  ,abs_vort(I,J+1),abs_vort(I,J+2),abs_vort(I,J+3), & 
+                                           v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8, v_u, q_u, CS%weno_velocity_smooth)
+        elseif (fifth_order == 1) then
+            ! all values are valid, we use fifth order reconstruction
+            call weno_five_reconstruction(abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), &
+                                            abs_vort(I,J),abs_vort(I,J+1),abs_vort(I,J+2),  & 
+                                          v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_u, q_u, CS%weno_velocity_smooth)
+
+        elseif (third_order == 1) then
+            ! only the middle values are valid, we use third order reconstruction
+            call weno_three_reconstruction(abs_vort(I,J-2),abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1), & 
+                                           v_q3, v_q4, v_q5, v_q6, v_u, q_u, CS%weno_velocity_smooth)
+        else ! Upwind first order
+            if (v_u>0.) then
+                q_u = abs_vort(I,J)
+            else
+                q_u = abs_vort(I,J+1)
+            endif
+        endif
+
         CAu(I,j,k) = (q_u * v_u)
       enddo ; enddo            
-    elseif ((CS%Coriolis_Scheme == ARAKAWA_HSU90) .or. &
-            (CS%Coriolis_Scheme == ARAKAWA_LAMB81) .or. &
-            (CS%Coriolis_Scheme == AL_BLEND)) then
-      ! (Global) Energy and (Local) Enstrophy conserving, Arakawa & Hsu 1990
+    elseif (CS%Coriolis_Scheme == wenovi_5th_ENSTRO) then
       do j=js,je ; do I=Isq,Ieq
-        CAu(I,j,k) = (((a(I,j) * vh(i+1,J,k)) +  (c(I,j) * vh(i,J-1,k)))  + &
-                      ((b(I,j) * vh(i,J,k)) +  (d(I,j) * vh(i+1,J-1,k)))) * G%IdxCu(I,j)
+        v_u = 0.125 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
+
+        v_q2 = (v(i+1,J-3,k) + v(i,J-3,k)) * 0.5
+        v_q3 = (v(i+1,J-2,k) + v(i,J-2,k)) * 0.5
+        v_q4 = (v(i+1,J-1,k) + v(i,J-1,k)) * 0.5
+        v_q5 = (v(i+1,J  ,k) + v(i,J  ,k)) * 0.5
+        v_q6 = (v(i+1,J+1,k) + v(i,J+1,k)) * 0.5
+        v_q7 = (v(i+1,J+2,k) + v(i,J+2,k)) * 0.5
+!
+!        third_order = (G%mask2dCv(i+1,J-2) * G%mask2dCv(i+1,J-1) * G%mask2dCv(i+1,J) * G%mask2dCv(i+1,J+1) * &
+!                       G%mask2dCv(i,J-2)   * G%mask2dCv(i,J-1)   * G%mask2dCv(i,J)   * G%mask2dCv(i,J+1))
+!
+!        fifth_order   = third_order * G%mask2dCv(i+1,J-3) * G%mask2dCv(i,J-3) * G%mask2dCv(i+1,J+2) * G%mask2dCv(i,J+2)
+!
+!        ! compute the masking to make sure that inland values are not used
+!        if (fifth_order == 1) then
+!            ! all values are valid, we use fifth order reconstruction
+        call weno_five_reconstruction(rel_vort(I,J-3),rel_vort(I,J-2),rel_vort(I,J-1), &
+                                      rel_vort(I,J),rel_vort(I,J+1),rel_vort(I,J+2),  &
+                                      v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_u, q_u, CS%weno_velocity_smooth)
+
+!        elseif (third_order == 1) then
+!            ! only the middle values are valid, we use third order reconstruction
+!            call weno_three_reconstruction(abs_vort(I,J-2),abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1), &
+!                                           v_q3, v_q4, v_q5, v_q6, v_u, q_u, CS%weno_velocity_smooth)
+!        else ! Upwind first order
+!            if (v_u>0.) then
+!                q_u = abs_vort(I,J-1)
+!            else
+!                q_u = abs_vort(I,J)
+!            endif
+!        endif
+
+        f_u = 0.5 * (G%CoriolisBu(I,J) + G%CoriolisBu(I,J-1))
+        CAu(I,j,k) = ((q_u + f_u) * v_u)
       enddo ; enddo
-    elseif (CS%Coriolis_Scheme == ROBUST_ENSTRO) then
-      ! An enstrophy conserving scheme robust to vanishing layers
-      ! Note: Heffs are in lieu of h_at_v that should be returned by the
-      !       continuity solver. AJA
-      do j=js,je ; do I=Isq,Ieq
-        Heff1 = abs(vh(i,J,k) * G%IdxCv(i,J)) / (eps_vel+abs(v(i,J,k)))
-        Heff1 = max(Heff1, min(h(i,j,k),h(i,j+1,k)))
-        Heff1 = min(Heff1, max(h(i,j,k),h(i,j+1,k)))
-        Heff2 = abs(vh(i,J-1,k) * G%IdxCv(i,J-1)) / (eps_vel+abs(v(i,J-1,k)))
-        Heff2 = max(Heff2, min(h(i,j-1,k),h(i,j,k)))
-        Heff2 = min(Heff2, max(h(i,j-1,k),h(i,j,k)))
-        Heff3 = abs(vh(i+1,J,k) * G%IdxCv(i+1,J)) / (eps_vel+abs(v(i+1,J,k)))
-        Heff3 = max(Heff3, min(h(i+1,j,k),h(i+1,j+1,k)))
-        Heff3 = min(Heff3, max(h(i+1,j,k),h(i+1,j+1,k)))
-        Heff4 = abs(vh(i+1,J-1,k) * G%IdxCv(i+1,J-1)) / (eps_vel+abs(v(i+1,J-1,k)))
-        Heff4 = max(Heff4, min(h(i+1,j-1,k),h(i+1,j,k)))
-        Heff4 = min(Heff4, max(h(i+1,j-1,k),h(i+1,j,k)))
-        if (CS%PV_Adv_Scheme == PV_ADV_CENTERED) then
-          CAu(I,j,k) = 0.5*(abs_vort(I,J)+abs_vort(I,J-1)) * &
-                       ((vh(i,J,k) + vh(i+1,J-1,k)) + (vh(i,J-1,k) + vh(i+1,J,k)) ) /  &
-                       (h_tiny + ((Heff1+Heff4) + (Heff2+Heff3)) ) * G%IdxCu(I,j)
-        elseif (CS%PV_Adv_Scheme == PV_ADV_UPWIND1) then
-          VHeff = ((vh(i,J,k) + vh(i+1,J-1,k)) + (vh(i,J-1,k) + vh(i+1,J,k)) )
-          QVHeff = 0.5*( ((abs_vort(I,J)+abs_vort(I,J-1))*VHeff) &
-                       - ((abs_vort(I,J)-abs_vort(I,J-1))*abs(VHeff)) )
-          CAu(I,j,k) = (QVHeff / ( h_tiny + ((Heff1+Heff4) + (Heff2+Heff3)) ) ) * G%IdxCu(I,j)
-        endif
-      enddo ; enddo
-    elseif (CS%Coriolis_Scheme == SECOND_ENSTRO) then
-      do j=js,je ; do I=Isq,Ieq
-        CAu(I,j,k) = 0.125 * ((abs_vort(I,J) + abs_vort(I,J-1))) * &
-                     ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
-      enddo ; enddo
+
     elseif (CS%Coriolis_Scheme == THIRD_ENSTRO) then
       do j=js,je ; do I=Isq,Ieq
         v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
         if (v_u>0.) then
-          abs_vort_u = (-abs_vort(I,J-2) + 5*abs_vort(I,J-1) + 2*abs_vort(I,J))/6.
+          abs_vort_u = (-rel_vort(I,J-2) + 5*rel_vort(I,J-1) + 2*rel_vort(I,J))/6.
         else
-          abs_vort_u = (2*abs_vort(I,J-1) + 5*abs_vort(I,J) - abs_vort(I,J+1))/6.
+          abs_vort_u = (2*rel_vort(I,J-1) + 5*rel_vort(I,J) - rel_vort(I,J+1))/6.
         endif  
-        CAu(I,j,k) = abs_vort_u * v_u
+        f_u = 0.5 * (G%CoriolisBu(I,J) + G%CoriolisBu(I,J-1))
+        CAu(I,j,k) = (abs_vort_u + f_u) * v_u
       enddo ; enddo
-    endif
-    ! Add in the additional terms with Arakawa & Lamb.
-    if ((CS%Coriolis_Scheme == ARAKAWA_LAMB81) .or. &
-        (CS%Coriolis_Scheme == AL_BLEND)) then ; do j=js,je ; do I=Isq,Ieq
-      CAu(I,j,k) = CAu(I,j,k) + &
-            ((ep_u(i,j)*uh(I-1,j,k)) - (ep_u(i+1,j)*uh(I+1,j,k))) * G%IdxCu(I,j)
-    enddo ; enddo ; endif
-
-    if (Stokes_VF) then
-      if (CS%id_CAuS>0 .or. CS%id_CAvS>0) then
-        ! Computing the diagnostic Stokes contribution to CAu
-        do j=js,je ; do I=Isq,Ieq
-          CAuS(I,j,k) = 0.25 * &
-                ((qS(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
-                 (qS(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k)))) * G%IdxCu(I,j)
-        enddo ; enddo
-      endif
     endif
 
     if (CS%bound_Coriolis) then
@@ -792,105 +782,100 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
     ! Calculate the tendencies of meridional velocity due to the Coriolis
     ! force and momentum advection.  On a Cartesian grid, this is
     !     CAv = - q * uh - d(KE)/dy.
-    if (CS%Coriolis_Scheme == SADOURNY75_ENERGY) then
-      if (CS%Coriolis_En_Dis) then
-        ! Energy dissipating biased scheme, Hallberg 200x
-        do J=Jsq,Jeq ; do i=is,ie
-          if (q(I-1,J)*v(i,J,k) == 0.0) then
-            temp1 = q(I-1,J) * ( (uh_max(i-1,j)+uh_max(i-1,j+1)) &
-                               + (uh_min(i-1,j)+uh_min(i-1,j+1)) )*0.5
-          elseif (q(I-1,J)*v(i,J,k) > 0.0) then
-            temp1 = q(I-1,J) * (uh_max(i-1,j)+uh_max(i-1,j+1))
-          else
-            temp1 = q(I-1,J) * (uh_min(i-1,j)+uh_min(i-1,j+1))
-          endif
-          if (q(I,J)*v(i,J,k) == 0.0) then
-            temp2 = q(I,J) * ( (uh_max(i,j)+uh_max(i,j+1)) &
-                             + (uh_min(i,j)+uh_min(i,j+1)) )*0.5
-          elseif (q(I,J)*v(i,J,k) > 0.0) then
-            temp2 = q(I,J) * (uh_max(i,j)+uh_max(i,j+1))
-          else
-            temp2 = q(I,J) * (uh_min(i,j)+uh_min(i,j+1))
-          endif
-          CAv(i,J,k) = -0.25 * G%IdyCv(i,J) * (temp1 + temp2)
-        enddo ; enddo
-      else
-        ! Energy conserving scheme, Sadourny 1975
-        do J=Jsq,Jeq ; do i=is,ie
-          CAv(i,J,k) = - 0.25* &
-              ((q(I-1,J)*(uh(I-1,j,k) + uh(I-1,j+1,k))) + &
-               (q(I,J)*(uh(I,j,k) + uh(I,j+1,k)))) * G%IdyCv(i,J)
-        enddo ; enddo
-      endif
-    elseif (CS%Coriolis_Scheme == SADOURNY75_ENSTRO) then
+    if (CS%Coriolis_Scheme == wenovi_7th_ENSTRO) then
       do J=Jsq,Jeq ; do i=is,ie
-        CAv(i,J,k) = -0.125 * (G%IdyCv(i,J) * (q(I-1,J) + q(I,J))) * &
-                     ((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
-      enddo ; enddo
-    elseif (CS%Coriolis_Scheme == wenovi_ENSTRO) then
-      do J=Jsq,Jeq ; do i=is,ie
-        u_v = G%IdyCv(i,J) * (uh(I-1,j,k) + uh(I-1,j+1,k) + uh(I,j,k) + uh(I,j+1,k)) * 0.125
-        call weno_face_reconstruction(q(I-3,J),q(I-2,J),q(I-1,J),q(I,J),q(I+1,J),q(I+2,J),u_v,q_v)
-!        u_v = (u(I-1,j,k) + u(I-1,j+1,k) + u(I,j,k) + u(I,j+1,k)) * 0.125
-!        call weno_face_reconstruction(abs_vort(I-3,J),abs_vort(I-2,J),&
-!                abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J),abs_vort(I+2,J),u_v,q_v)
+        u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
+
+        u_q1 = (u(I-4,j+1,k) + u(I-4,j,k)) * 0.5
+        u_q2 = (u(I-3,j+1,k) + u(I-3,j,k)) * 0.5
+        u_q3 = (u(I-2,j+1,k) + u(I-2,j,k)) * 0.5
+        u_q4 = (u(I-1,j+1,k) + u(I-1,j,k)) * 0.5
+        u_q5 = (u(I  ,j+1,k) + u(I  ,j,k)) * 0.5
+        u_q6 = (u(I+1,j+1,k) + u(I+1,j,k)) * 0.5
+        u_q7 = (u(I+2,j+1,k) + u(I+2,j,k)) * 0.5
+        u_q8 = (u(I+3,j+1,k) + u(I+3,j,k)) * 0.5
+        
+        third_order = (G%mask2dCu(I-2,j+1) * G%mask2dCu(I-1,j+1) * G%mask2dCu(I,j+1) * G%mask2dCu(I+1,j+1) * & 
+                       G%mask2dCu(I-2,j)   * G%mask2dCu(I-1,j)   * G%mask2dCu(I,j)   * G%mask2dCu(I+1,j))
+
+        fifth_order   = third_order * G%mask2dCu(I-3,j+1) * G%mask2dCu(I-3,j) * G%mask2dCu(I+2,j+1) * G%mask2dCu(I+2,j)
+        seventh_order = fifth_order * G%mask2dCu(I-4,j+1) * G%mask2dCu(I-4,j) * G%mask2dCu(I+3,j+1) * G%mask2dCu(I+3,j)
+
+        ! compute the masking to make sure that inland values are not used
+        if (seventh_order == 1) then
+            ! all values are valid, we use seventh order reconstruction
+            call weno_seven_reconstruction(abs_vort(I-4,J),abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), & 
+                                           abs_vort(I,J)  ,abs_vort(I+1,J),abs_vort(I+2,J),abs_vort(I+3,J), & 
+                                           u_q1, u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_q8, u_v, q_v, CS%weno_velocity_smooth)
+
+        elseif (fifth_order == 1) then
+            ! all values are valid, we use fifth order reconstruction
+            call weno_five_reconstruction(abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), &
+                                          abs_vort(I,J),abs_vort(I+1,J),abs_vort(I+2,J), & 
+                                          u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_v, q_v, CS%weno_velocity_smooth)
+
+        elseif (third_order == 1) then
+            ! only the middle values are valid, we use third order reconstruction
+                call weno_three_reconstruction(abs_vort(I-2,J),abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J), & 
+                                               u_q3, u_q4, u_q5, u_q6, u_v, q_v, CS%weno_velocity_smooth)
+        else ! Upwind first order!
+            if (u_v>0.) then
+                q_v = abs_vort(I-1,J)
+            else
+                q_v = abs_vort(I,J)
+            endif
+        endif
+
         CAv(i,J,k) = - (q_v * u_v)
       enddo ; enddo
-    elseif ((CS%Coriolis_Scheme == ARAKAWA_HSU90) .or. &
-            (CS%Coriolis_Scheme == ARAKAWA_LAMB81) .or. &
-            (CS%Coriolis_Scheme == AL_BLEND)) then
-      ! (Global) Energy and (Local) Enstrophy conserving, Arakawa & Hsu 1990
+    elseif (CS%Coriolis_Scheme == wenovi_5th_ENSTRO) then
       do J=Jsq,Jeq ; do i=is,ie
-        CAv(i,J,k) = - (((a(I-1,j)   * uh(I-1,j,k)) + &
-                         (c(I,j+1)   * uh(I,j+1,k)))  &
-                      + ((b(I,j)     * uh(I,j,k)) +   &
-                         (d(I-1,j+1) * uh(I-1,j+1,k)))) * G%IdyCv(i,J)
-      enddo ; enddo
-    elseif (CS%Coriolis_Scheme == ROBUST_ENSTRO) then
-      ! An enstrophy conserving scheme robust to vanishing layers
-      ! Note: Heffs are in lieu of h_at_u that should be returned by the
-      !       continuity solver. AJA
-      do J=Jsq,Jeq ; do i=is,ie
-        Heff1 = abs(uh(I,j,k) * G%IdyCu(I,j)) / (eps_vel+abs(u(I,j,k)))
-        Heff1 = max(Heff1, min(h(i,j,k),h(i+1,j,k)))
-        Heff1 = min(Heff1, max(h(i,j,k),h(i+1,j,k)))
-        Heff2 = abs(uh(I-1,j,k) * G%IdyCu(I-1,j)) / (eps_vel+abs(u(I-1,j,k)))
-        Heff2 = max(Heff2, min(h(i-1,j,k),h(i,j,k)))
-        Heff2 = min(Heff2, max(h(i-1,j,k),h(i,j,k)))
-        Heff3 = abs(uh(I,j+1,k) * G%IdyCu(I,j+1)) / (eps_vel+abs(u(I,j+1,k)))
-        Heff3 = max(Heff3, min(h(i,j+1,k),h(i+1,j+1,k)))
-        Heff3 = min(Heff3, max(h(i,j+1,k),h(i+1,j+1,k)))
-        Heff4 = abs(uh(I-1,j+1,k) * G%IdyCu(I-1,j+1)) / (eps_vel+abs(u(I-1,j+1,k)))
-        Heff4 = max(Heff4, min(h(i-1,j+1,k),h(i,j+1,k)))
-        Heff4 = min(Heff4, max(h(i-1,j+1,k),h(i,j+1,k)))
-        if (CS%PV_Adv_Scheme == PV_ADV_CENTERED) then
-          CAv(i,J,k) = - 0.5*(abs_vort(I,J)+abs_vort(I-1,J)) * &
-                         ((uh(I  ,j  ,k)+uh(I-1,j+1,k)) +      &
-                          (uh(I-1,j  ,k)+uh(I  ,j+1,k)) ) /    &
-                      (h_tiny + ((Heff1+Heff4) +(Heff2+Heff3)) ) * G%IdyCv(i,J)
-        elseif (CS%PV_Adv_Scheme == PV_ADV_UPWIND1) then
-          UHeff = ((uh(I  ,j  ,k)+uh(I-1,j+1,k)) +      &
-                   (uh(I-1,j  ,k)+uh(I  ,j+1,k)) )
-          QUHeff = 0.5*( ((abs_vort(I,J)+abs_vort(I-1,J))*UHeff) &
-                       - ((abs_vort(I,J)-abs_vort(I-1,J))*abs(UHeff)) )
-          CAv(i,J,k) = - QUHeff / &
-                       (h_tiny + ((Heff1+Heff4) +(Heff2+Heff3)) ) * G%IdyCv(i,J)
-        endif
-      enddo ; enddo
-    elseif (CS%Coriolis_Scheme == SECOND_ENSTRO) then
-      do J=Jsq,Jeq ; do i=is,ie
-        CAv(i,J,k) = -0.125 * ((abs_vort(I-1,J) + abs_vort(I,J))) * &
-                     ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
-      enddo ; enddo
+        u_v = 0.125* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
+
+        u_q2 = (u(I-3,j+1,k) + u(I-3,j,k)) * 0.5
+        u_q3 = (u(I-2,j+1,k) + u(I-2,j,k)) * 0.5
+        u_q4 = (u(I-1,j+1,k) + u(I-1,j,k)) * 0.5
+        u_q5 = (u(I  ,j+1,k) + u(I  ,j,k)) * 0.5
+        u_q6 = (u(I+1,j+1,k) + u(I+1,j,k)) * 0.5
+        u_q7 = (u(I+2,j+1,k) + u(I+2,j,k)) * 0.5
+!
+!        third_order = (G%mask2dCu(I-2,j+1) * G%mask2dCu(I-1,j+1) * G%mask2dCu(I,j+1) * G%mask2dCu(I+1,j+1) * &
+!                       G%mask2dCu(I-2,j)   * G%mask2dCu(I-1,j)   * G%mask2dCu(I,j)   * G%mask2dCu(I+1,j))
+!
+!        fifth_order   = third_order * G%mask2dCu(I-3,j+1) * G%mask2dCu(I-3,j) * G%mask2dCu(I+2,j+1) * G%mask2dCu(I+2,j)
+
+!        ! compute the masking to make sure that inland values are not used
+!
+!        if (fifth_order == 1) then
+!            ! all values are valid, we use fifth order reconstruction
+        call weno_five_reconstruction(rel_vort(I-3,J),rel_vort(I-2,J),rel_vort(I-1,J), &
+                                      rel_vort(I,J),rel_vort(I+1,J),rel_vort(I+2,J), &
+                                      u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_v, q_v, CS%weno_velocity_smooth)
+!        elseif (third_order == 1) then
+!            ! only the middle values are valid, we use third order reconstruction
+!                call weno_three_reconstruction(abs_vort(I-2,J),abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J), &
+!                                               u_q3, u_q4, u_q5, u_q6, u_v, q_v, CS%weno_velocity_smooth)
+!        else ! Upwind first order!
+!        if (u_v>0.) then
+!          q_v = abs_vort(I-1,J)
+!        else
+!          q_v = abs_vort(I,J)
+!        endif
+!        endif
+
+        f_v = 0.5 * (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J))
+        CAv(i,J,k) = - ((q_v + f_v) * u_v)
+      enddo ; enddo      
     elseif (CS%Coriolis_Scheme == THIRD_ENSTRO) then
       do J=Jsq,Jeq ; do i=is,ie
         u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
         if (u_v>0.) then
-          abs_vort_v = (-abs_vort(I-2,J) + 5*abs_vort(I-1,J) + 2*abs_vort(I,J))/6.
+          abs_vort_v = (-rel_vort(I-2,J) + 5*rel_vort(I-1,J) + 2*rel_vort(I,J))/6.
         else
-          abs_vort_v = (2*abs_vort(I-1,J) + 5*abs_vort(I,J) - abs_vort(I+1,J))/6.
+          abs_vort_v = (2*rel_vort(I-1,J) + 5*rel_vort(I,J) - rel_vort(I+1,J))/6.
         endif  
-        CAv(i,J,k) = -abs_vort_v * u_v
+        f_v = 0.5 * (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J))
+        CAv(i,J,k) = - (abs_vort_v + f_v) * u_v
       enddo ; enddo
     endif
     ! Add in the additonal terms with Arakawa & Lamb.
@@ -909,21 +894,6 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
                  (qS(I,J-1) * (uh(I-1,j,k) + uh(I-1,j+1,k)))) * G%IdyCv(i,J)
         enddo; enddo
       endif
-    endif
-
-    if (CS%bound_Coriolis) then
-      do J=Jsq,Jeq ; do i=is,ie
-        fu1 = -abs_vort(I,J) * u(I,j+1,k)
-        fu2 = -abs_vort(I,J) * u(I,j,k)
-        fu3 = -abs_vort(I-1,J) * u(I-1,j+1,k)
-        fu4 = -abs_vort(I-1,J) * u(I-1,j,k)
-
-        max_fu = max(fu1, fu2, fu3, fu4)
-        min_fu = min(fu1, fu2, fu3, fu4)
-
-        CAv(I,j,k) = min(CAv(I,j,k), max_fu)
-        CAv(I,j,k) = max(CAv(I,j,k), min_fu)
-      enddo ; enddo
     endif
 
     ! Term - d(KE)/dy.
@@ -1020,92 +990,304 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 
 end subroutine CorAdCalc
 
-subroutine weno_face_reconstruction(q1, q2, q3, q4, q5, q6, u, qr)
-  real, intent(in) ::  q1, q2, q3, q4, q5, q6
-  real, intent(in) :: u
-  real, intent(inout) :: qr
-  real  :: c0, c1, c2
-  real  :: b0, b1, b2
-  real :: tau, w0, w1, w2
-  real :: s
+subroutine weno_three_reconstruction(q1, q2, q3, q4, u1, u2, u3, u4, u, qr, velocity_smoothing)
+    real, intent(in)    :: q1, q2, q3, q4
+    real, intent(in)    :: u1, u2, u3, u4
+    real, intent(in)    :: u
+    logical, intent(in) :: velocity_smoothing
+    real, intent(inout) :: qr
+    real :: c0, c1
+    real :: b0, b1
+    real :: tau, w0, w1
+    real :: s
+    
+    if (u>0.) then
+      call weno_three_reconstruction_0(q2, q3, c0)
+      call weno_three_reconstruction_1(q1, q2, c1) 
+      if (velocity_smoothing == .true.) then
+        call weno_three_weight(u2, u3, b0)
+        call weno_three_weight(u1, u2, b1)
+      else
+        call weno_three_weight(q2, q3, b0)
+        call weno_three_weight(q1, q2, b1)
+      endif
+    else
+      call weno_three_reconstruction_0(q3, q2, c0)
+      call weno_three_reconstruction_1(q4, q3, c1)
+      if (velocity_smoothing == .true.) then
+        call weno_three_weight(u3, u2, b0)
+        call weno_three_weight(u4, u3, b1)
+      else
+        call weno_three_weight(q3, q2, b0)
+        call weno_three_weight(q4, q3, b1)
+      endif
+    endif
+  
+    tau = abs(b0-b1)
+    w0  = 2./3. * (1 + (tau / (b0 + 1e-8))**2)
+    w1  = 1./3. * (1 + (tau / (b1 + 1e-8))**2)
+  
+    s = 1. / (w0 + w1)
+    w0 = w0 * s
+    w1 = w1 * s
+  
+    qr = w0 * c0 + w1 * c1
+  
+end subroutine weno_three_reconstruction
 
-  if (u>0.) then
-    call reconstruct0(q3, q4, q5, c0)
-    call reconstruct1(q2, q3, q4, c1) 
-    call reconstruct2(q1, q2, q3, c2)
-    call weight0(q3, q4, q5, b0)
-    call weight1(q2, q3, q4, b1)
-    call weight2(q1, q2, q3, b2)
-  else
-    call reconstruct0(q4, q3, q2, c0)
-    call reconstruct1(q5, q4, q3, c1)
-    call reconstruct2(q6, q5, q4, c2)
-    call weight0(q4, q3, q2, b0)
-    call weight1(q5, q4, q3, b1)
-    call weight2(q6, q5, q4, b2)
-  endif
+subroutine weno_three_weight(q0, q1, w0)
+    real, intent(in) :: q0,q1
+    real, intent(inout) :: w0
+  
+    w0 = q0 * q0 - 2 * q0 * q1 + q1 * q1
+    
+end subroutine weno_three_weight
 
-  tau = abs(b0-b2)
-  w0  = 3./10 * (1 + (tau / (b0 + 1e-8))**2)
-  w1  = 3./5  * (1 + (tau / (b1 + 1e-8))**2)
-  w2  = 1./10 * (1 + (tau / (b2 + 1e-8))**2)
+subroutine weno_three_reconstruction_0(q0, q1, w0)
+    real, intent(in) :: q0,q1
+    real, intent(inout) :: w0
+  
+    w0 = (q0 + q1) * 0.5
 
-  s = 1 / (w0 + w1 + w2)
-  w0 = w0 * s
-  w1 = w1 * s
-  w2 = w2 * s
+end subroutine weno_three_reconstruction_0
 
-  qr = w0 * c0 + w1 * c1 + w2 * c2
+subroutine weno_three_reconstruction_1(q0, q1, w0)
+    real, intent(in) :: q0,q1
+    real, intent(inout) :: w0
+  
+    w0 = (- q0 + 3 * q1) * 0.5
 
-end subroutine weno_face_reconstruction
+end subroutine weno_three_reconstruction_1
 
-subroutine weight0(q0, q1, q2, w0)
+subroutine weno_five_reconstruction(q1, q2, q3, q4, q5, q6, u1, u2, u3, u4, u5, u6, u, qr, velocity_smoothing)
+    real, intent(in)    :: q1, q2, q3, q4, q5, q6
+    real, intent(in)    :: u1, u2, u3, u4, u5, u6
+    real, intent(in)    :: u
+    logical, intent(in) :: velocity_smoothing
+    real, intent(inout) :: qr
+    real :: c0, c1, c2
+    real :: b0, b1, b2
+    real :: tau, w0, w1, w2
+    real :: s
+  
+    if (u>0.) then
+      call weno_five_reconstruction_0(q3, q4, q5, c0)
+      call weno_five_reconstruction_1(q2, q3, q4, c1) 
+      call weno_five_reconstruction_2(q1, q2, q3, c2)
+      if (velocity_smoothing == .true.) then
+        call weno_five_weight_0(u3, u4, u5, b0)
+        call weno_five_weight_1(u2, u3, u4, b1)
+        call weno_five_weight_2(u1, u2, u3, b2)
+      else
+        call weno_five_weight_0(q3, q4, q5, b0)
+        call weno_five_weight_1(q2, q3, q4, b1)
+        call weno_five_weight_2(q1, q2, q3, b2)
+      endif
+    else
+      call weno_five_reconstruction_0(q4, q3, q2, c0)
+      call weno_five_reconstruction_1(q5, q4, q3, c1)
+      call weno_five_reconstruction_2(q6, q5, q4, c2)
+      if (velocity_smoothing == .true.) then
+        call weno_five_weight_0(u4, u3, u2, b0)
+        call weno_five_weight_1(u5, u4, u3, b1)
+        call weno_five_weight_2(u6, u5, u4, b2)
+      else
+        call weno_five_weight_0(q4, q3, q2, b0)
+        call weno_five_weight_1(q5, q4, q3, b1)
+        call weno_five_weight_2(q6, q5, q4, b2)
+      endif
+    endif
+  
+    tau = abs(b0-b2)
+    w0  = 3./10. * (1 + (tau / (b0 + 1e-8))**2)
+    w1  = 3./5.  * (1 + (tau / (b1 + 1e-8))**2)
+    w2  = 1./10. * (1 + (tau / (b2 + 1e-8))**2)
+  
+    s = 1. / (w0 + w1 + w2)
+    w0 = w0 * s
+    w1 = w1 * s
+    w2 = w2 * s
+  
+    qr = w0 * c0 + w1 * c1 + w2 * c2
+  
+end subroutine weno_five_reconstruction
+
+subroutine weno_five_weight_0(q0, q1, q2, w0)
   real, intent(in) :: q0,q1,q2
   real, intent(inout) :: w0
 
-  w0 = 13/12 * (q0 - 2*q1 + q2)**2 + 0.25 * (3*q0 - 4*q1 + q2)**2
+  w0 = q0 * (10 * q0 - 31 * q1 + 11 * q2) + q1 * (25 * q1 - 19 * q2) + 4 * q2 * q2
+  
+end subroutine weno_five_weight_0
 
-end subroutine weight0
-
-subroutine weight1(q0, q1, q2, w1)
+subroutine weno_five_weight_1(q0, q1, q2, w1)
   real, intent(in) :: q0,q1,q2
   real, intent(inout) :: w1
 
-  w1 = 13/12 * (q0 - 2*q1 + q2)**2 + 0.25 * (q0 - q2)**2
+  w1 = q0 * (4 * q0 - 13 * q1 + 5 * q2) + q1 * (13 * q1 - 13 * q2) + 4 * q2 * q2
 
-end subroutine weight1
+end subroutine weno_five_weight_1
 
-subroutine weight2(q0, q1, q2, w2)
+subroutine weno_five_weight_2(q0, q1, q2, w2)
   real, intent(in) :: q0, q1, q2
   real, intent(inout) :: w2
 
-  w2 = 13/12 * (q0 - 2*q1 + q2)**2 + 0.25 * (q0 - 4*q1 + 3*q2)**2
+  w2 = q0 * (4 * q0 - 19 * q1 + 11 * q2) + q1 * (25 * q1 - 31 * q2) + 10 * q2 * q2
 
-end subroutine weight2
+end subroutine weno_five_weight_2
 
-subroutine reconstruct0(q0, q1, q2, p0)
+subroutine weno_five_reconstruction_0(q0, q1, q2, p0)
   real, intent(in) :: q0,q1,q2
   real, intent(inout) :: p0
 
-  p0 = (2*q0 + 5*q1 - q2)/6.
+  p0 = (2*q0 + 5*q1 - q2) / 6.
 
-end subroutine reconstruct0
+end subroutine weno_five_reconstruction_0
 
-subroutine reconstruct1(q0, q1, q2, p1)
+subroutine weno_five_reconstruction_1(q0, q1, q2, p1)
   real, intent(in) :: q0,q1,q2
   real, intent(inout) :: p1
 
-  p1 = (-q0 + 5*q1 + 2*q2)/6.
+  p1 = (-q0 + 5*q1 + 2*q2) / 6.
 
-end subroutine reconstruct1
+end subroutine weno_five_reconstruction_1
 
-subroutine reconstruct2(q0, q1, q2, p2)
+subroutine weno_five_reconstruction_2(q0, q1, q2, p2)
   real, intent(in) :: q0,q1,q2
   real, intent(inout) :: p2
 
-  p2 = (2*q0 - 7*q1 + 11*q2)/6.
+  p2 = (2*q0 - 7*q1 + 11*q2) / 6.
 
-end subroutine reconstruct2
+end subroutine weno_five_reconstruction_2
+
+subroutine weno_seven_reconstruction(q1, q2, q3, q4, q5, q6, q7, q8, u1, u2, u3, u4, u5, u6, u7, u8, u, qr, velocity_smoothing)
+  real, intent(in)    :: q1, q2, q3, q4, q5, q6, q7, q8
+  real, intent(in)    :: u1, u2, u3, u4, u5, u6, u7, u8
+  real, intent(in)    :: u
+  logical, intent(in) :: velocity_smoothing
+  real, intent(inout) :: qr
+  real :: c0, c1, c2, c3
+  real :: b0, b1, b2, b3
+  real :: tau, w0, w1, w2, w3
+  real :: s
+
+  if (u>0.) then
+    call weno_seven_reconstruction_0(q4, q5, q6, q7, c0)
+    call weno_seven_reconstruction_1(q3, q4, q5, q6, c1) 
+    call weno_seven_reconstruction_2(q2, q3, q4, q5, c2)
+    call weno_seven_reconstruction_3(q1, q2, q3, q4, c3)
+    if (velocity_smoothing == .true.) then
+      call weno_seven_weight_0(u4, u5, u6, u7, b0)
+      call weno_seven_weight_1(u3, u4, u5, u6, b1)
+      call weno_seven_weight_2(u2, u3, u4, u5, b2)
+      call weno_seven_weight_3(u1, u2, u3, u4, b3)
+    else
+      call weno_seven_weight_0(q4, q5, q6, q7, b0)
+      call weno_seven_weight_1(q3, q4, q5, q6, b1)
+      call weno_seven_weight_2(q2, q3, q4, q5, b2)
+      call weno_seven_weight_3(q1, q2, q3, q4, b3)
+    endif
+  else
+    call weno_seven_reconstruction_0(q5, q4, q3, q2, c0)
+    call weno_seven_reconstruction_1(q6, q5, q4, q3, c1)
+    call weno_seven_reconstruction_2(q7, q6, q5, q4, c2)
+    call weno_seven_reconstruction_3(q8, q7, q6, q5, c3)
+    if (velocity_smoothing == .true.) then
+      call weno_seven_weight_0(u5, u4, u3, u2, b0)
+      call weno_seven_weight_1(u6, u5, u4, u3, b1)
+      call weno_seven_weight_2(u7, u6, u5, u4, b2)
+      call weno_seven_weight_3(u8, u7, u6, u5, b3)
+    else
+      call weno_seven_weight_0(q5, q4, q3, q2, b0)
+      call weno_seven_weight_1(q6, q5, q4, q3, b1)
+      call weno_seven_weight_2(q7, q6, q5, q4, b2)
+      call weno_seven_weight_3(q8, q7, q6, q5, b3)
+    endif
+  endif
+
+  tau = abs(b0 + 3 * b1 - 3 * b2 - b3)
+  w0  = 4./35.  * (1 + (tau / (b0 + 1e-8))**2)
+  w1  = 18./35. * (1 + (tau / (b1 + 1e-8))**2)
+  w2  = 12./35. * (1 + (tau / (b2 + 1e-8))**2)
+  w3  = 1./35.  * (1 + (tau / (b3 + 1e-8))**2)
+
+  s = 1. / (w0 + w1 + w2 + w3)
+  w0 = w0 * s
+  w1 = w1 * s
+  w2 = w2 * s
+  w3 = w3 * s
+
+  qr = w0 * c0 + w1 * c1 + w2 * c2 + w3 * c3
+
+end subroutine weno_seven_reconstruction
+
+subroutine weno_seven_weight_0(q0, q1, q2, q3, w0)
+  real, intent(in) :: q0,q1,q2,q3
+  real, intent(inout) :: w0
+
+  w0 = q0 * (2.107 * q0 - 9.402 * q1 + 7.042 * q2 - 1.854 * q3) + q1 * (11.003 * q1 - 17.246 * q2 + 4.642 * q3) + &
+       q2 * (7.043 * q2 - 3.882 * q3) + 0.547 * q3 * q3
+       
+end subroutine weno_seven_weight_0
+
+subroutine weno_seven_weight_1(q0, q1, q2, q3, w1)
+  real, intent(in) :: q0,q1,q2,q3
+  real, intent(inout) :: w1
+
+  w1 = q0 * (0.547 * q0 - 2.522 * q1 + 1.922 * q2 - 0.494 * q3) + q1 * (3.443 * q1 - 5.966 * q2 + 1.602 * q3) + &
+       q2 * (2.843 * q2 - 1.642 * q3) + 0.267 * q3 * q3
+       
+end subroutine weno_seven_weight_1
+    
+subroutine weno_seven_weight_2(q0, q1, q2, q3, w2)
+  real, intent(in) :: q0,q1,q2,q3
+  real, intent(inout) :: w2
+
+  w2 = q0 * (0.267 * q0 - 1.642 * q1 + 1.602 * q2 - 0.494 * q3) + q1 * (2.843 * q1 - 5.966 * q2 + 1.922 * q3) + &
+       q2 * (3.443 * q2 - 2.522 * q3) + 0.547 * q3 * q3
+       
+end subroutine weno_seven_weight_2
+
+subroutine weno_seven_weight_3(q0, q1, q2, q3, w3)
+  real, intent(in) :: q0,q1,q2,q3
+  real, intent(inout) :: w3
+
+  w3 = q0 * (0.547  * q0 - 3.882 * q1 + 4.642 * q2 - 1.854 * q3) + q1 * (7.043 * q1 - 17.246 * q2 + 7.042 * q3) + &
+       q2 * (11.003 * q2 - 9.402 * q3) + 2.107 * q3 * q3
+       
+end subroutine weno_seven_weight_3
+
+subroutine weno_seven_reconstruction_0(q0, q1, q2, q3, p0)
+  real, intent(in) :: q0,q1,q2,q3
+  real, intent(inout) :: p0
+
+  p0 = (6*q0 + 26*q1 - 10*q2 + 2*q3) / 24.
+
+end subroutine weno_seven_reconstruction_0
+
+subroutine weno_seven_reconstruction_1(q0, q1, q2, q3, p1)
+  real, intent(in) :: q0,q1,q2,q3
+  real, intent(inout) :: p1
+
+  p1 = (-2*q0 + 14*q1 + 14*q2 - 2*q3) / 24.
+
+end subroutine weno_seven_reconstruction_1
+
+subroutine weno_seven_reconstruction_2(q0, q1, q2, q3, p2)
+  real, intent(in) :: q0,q1,q2,q3
+  real, intent(inout) :: p2
+
+  p2 = (2*q0 - 10*q1 + 26*q2 + 6*q3) / 24.
+
+end subroutine weno_seven_reconstruction_2
+
+subroutine weno_seven_reconstruction_3(q0, q1, q2, q3, p3)
+  real, intent(in) :: q0,q1,q2,q3
+  real, intent(inout) :: p3
+
+  p3 = (-6*q0 + 26*q1 - 46*q2 + 50*q3) / 24.
+
+end subroutine weno_seven_reconstruction_3
 
 !> Calculates the acceleration due to the gradient of kinetic energy.
 subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
@@ -1245,7 +1427,8 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
                  "\t                      Arakawa & Hsu and Sadourny energy \n"//&
                  "\t SECOND_ENSTRO - 2nd-order enstrophy cons. \n"//&
                  "\t THIRD_ENSTRO - 3rd-order enstrophy cons. \n"//&
-                 "\t WENOVI_ENSTRO - 3rd-order enstrophy cons.",&
+                 "\t WENOVI_5TH_ENSTRO - 5th-order enstrophy cons. \n"//&
+                 "\t WENOVI_7TH_ENSTRO - 7th-order enstrophy cons.",&
                  default=SADOURNY75_ENERGY_STRING)
   tmpstr = uppercase(tmpstr)
   select case (tmpstr)
@@ -1266,13 +1449,21 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
       CS%Coriolis_Scheme = SECOND_ENSTRO
     case (THIRD_ENSTRO_STRING)
       CS%Coriolis_Scheme = THIRD_ENSTRO
-    case (WENOVI_ENSTRO_STRING)
-      CS%Coriolis_Scheme = wenovi_ENSTRO      
+    case (WENOVI_7TH_ENSTRO_STRING)
+      CS%Coriolis_Scheme = wenovi_7th_ENSTRO      
+    case (WENOVI_5TH_ENSTRO_STRING)
+      CS%Coriolis_Scheme = wenovi_5th_ENSTRO      
     case default
       call MOM_mesg('CoriolisAdv_init: Coriolis_Scheme ="'//trim(tmpstr)//'"', 0)
       call MOM_error(FATAL, "CoriolisAdv_init: Unrecognized setting "// &
             "#define CORIOLIS_SCHEME "//trim(tmpstr)//" found in input file.")
   end select
+  if (CS%Coriolis_Scheme == wenovi_7th_ENSTRO .or. &
+      CS%Coriolis_Scheme == wenovi_5th_ENSTRO) then
+    call get_param(param_file, mdl, "WENO_VELOCITY_SMOOTH", CS%weno_velocity_smooth, &
+            "If true, use velocity to compute weighting for WENO. ", &
+                  default=.true.)
+  endif
   if (CS%Coriolis_Scheme == AL_BLEND) then
     call get_param(param_file, mdl, "CORIOLIS_BLEND_WT_LIN", CS%wt_lin_blend, &
                  "A weighting value for the ratio of inverse thicknesses, "//&
