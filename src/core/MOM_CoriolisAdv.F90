@@ -242,6 +242,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   real :: v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8 ! is the u velocity at q points
   real :: abs_vort_u, abs_vort_v  ! absolute vorticity at u and v points
   real :: f_u, f_v      ! Coriolis coefficient at u and v points
+  real :: fv, fu        ! f*v at u point and -f*u at v point
 
 ! To work, the following fields must be set outside of the usual
 ! is to ie range before this subroutine is called:
@@ -687,8 +688,8 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         ! compute the masking to make sure that inland values are not used
         if (seventh_order == 1) then
             ! all values are valid, we use seventh order reconstruction
-            call weno_seven_reconstruction(abs_vort(I,J-4),abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), & 
-                                           abs_vort(I,J)  ,abs_vort(I,J+1),abs_vort(I,J+2),abs_vort(I,J+3), & 
+            call weno_seven_reconstruction(rel_vort(I,J-4),rel_vort(I,J-3),rel_vort(I,J-2),rel_vort(I,J-1), & 
+                                           rel_vort(I,J)  ,rel_vort(I,J+1),rel_vort(I,J+2),rel_vort(I,J+3), & 
                                            u_q1, u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_q8, v_u, q_u, CS%weno_velocity_smooth)
 
             ! call weno_seven_reconstruction(abs_vort(I,J-4),abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), & 
@@ -698,23 +699,27 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
             ! q_u = 0.5 * (q_uu + q_uv)
         elseif (fifth_order == 1) then
             ! all values are valid, we use fifth order reconstruction
-            call weno_five_reconstruction(abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), &
-                                          abs_vort(I,J),  abs_vort(I,J+1),abs_vort(I,J+2), & 
+            call weno_five_reconstruction(rel_vort(I,J-3),rel_vort(I,J-2),rel_vort(I,J-1), &
+                                          rel_vort(I,J),  rel_vort(I,J+1),rel_vort(I,J+2), & 
                                           u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, v_u, q_u, CS%weno_velocity_smooth)
 
         elseif (third_order == 1) then
             ! only the middle values are valid, we use third order reconstruction
-            call weno_three_reconstruction(abs_vort(I,J-2),abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1), & 
+            call weno_three_reconstruction(rel_vort(I,J-2),rel_vort(I,J-1),rel_vort(I,J),rel_vort(I,J+1), & 
                                            u_q3, u_q4, u_q5, u_q6, v_u, q_u, CS%weno_velocity_smooth)
         else ! Upwind first order
             if (v_u>0.) then
-                q_u = abs_vort(I,J-1)
+                q_u = rel_vort(I,J-1)
             else
-                q_u = abs_vort(I,J)
+                q_u = rel_vort(I,J)
             endif
         endif
 
-        CAu(I,j,k) = (q_u * v_u)
+        fv = 0.25 * &
+          ((G%CoriolisBu(I,J) * (v(i+1,J,k) + v(i,J,k))) + &
+           (G%CoriolisBu(I,J-1) * (v(i,J-1,k) + v(i+1,J-1,k))))  
+
+        CAu(I,j,k) = (q_u * v_u) + fv
       enddo ; enddo            
     elseif (CS%Coriolis_Scheme == wenovi_5th_ENSTRO) then
       do j=js,je ; do I=Isq,Ieq
@@ -763,8 +768,11 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         else
           abs_vort_u = (2*rel_vort(I,J-1) + 5*rel_vort(I,J) - rel_vort(I,J+1))/6.
         endif  
-        f_u = 0.5 * (G%CoriolisBu(I,J) + G%CoriolisBu(I,J-1))
-        CAu(I,j,k) = (abs_vort_u + f_u) * v_u
+       ! f_u = 0.5 * (G%CoriolisBu(I,J) + G%CoriolisBu(I,J-1))
+        fv = 0.25 * &
+          ((G%CoriolisBu(I,J) * (v(i+1,J,k) + v(i,J,k))) + &
+           (G%CoriolisBu(I,J-1) * (v(i,J-1,k) + v(i+1,J-1,k))))       
+        CAu(I,j,k) = (abs_vort_u) * v_u + fv
       enddo ; enddo
     endif
 
@@ -828,8 +836,8 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         ! compute the masking to make sure that inland values are not used
         if (seventh_order == 1) then
             ! all values are valid, we use seventh order reconstruction
-            call weno_seven_reconstruction(abs_vort(I-4,J),abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), & 
-                                           abs_vort(I,J)  ,abs_vort(I+1,J),abs_vort(I+2,J),abs_vort(I+3,J), & 
+            call weno_seven_reconstruction(rel_vort(I-4,J),rel_vort(I-3,J),rel_vort(I-2,J),rel_vort(I-1,J), & 
+                                           rel_vort(I,J)  ,rel_vort(I+1,J),rel_vort(I+2,J),rel_vort(I+3,J), & 
                                            v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8, u_v, q_v, CS%weno_velocity_smooth)
 
             ! all values are valid, we use seventh order reconstruction
@@ -839,23 +847,27 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 
         elseif (fifth_order == 1) then
             ! all values are valid, we use fifth order reconstruction
-            call weno_five_reconstruction(abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), &
-                                          abs_vort(I,J),abs_vort(I+1,J),abs_vort(I+2,J), & 
+            call weno_five_reconstruction(rel_vort(I-3,J),rel_vort(I-2,J),rel_vort(I-1,J), &
+                                          rel_vort(I,J),rel_vort(I+1,J),rel_vort(I+2,J), & 
                                           v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, u_v, q_v, CS%weno_velocity_smooth)
 
         elseif (third_order == 1) then
             ! only the middle values are valid, we use third order reconstruction
-                call weno_three_reconstruction(abs_vort(I-2,J),abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J), & 
+                call weno_three_reconstruction(rel_vort(I-2,J),rel_vort(I-1,J),rel_vort(I,J),rel_vort(I+1,J), & 
                                                v_q3, v_q4, v_q5, v_q6, u_v, q_v, CS%weno_velocity_smooth)
         else ! Upwind first order!
             if (u_v>0.) then
-                q_v = abs_vort(I-1,J)
+                q_v = rel_vort(I-1,J)
             else
-                q_v = abs_vort(I,J)
+                q_v = rel_vort(I,J)
             endif
         endif
 
-        CAv(i,J,k) = - (q_v * u_v)
+        fu = - 0.25* &
+            ((G%CoriolisBu(I-1,J)*(u(I-1,j,k) + u(I-1,j+1,k))) + &
+             (G%CoriolisBu(I,J)*(u(I,j,k) + u(I,j+1,k)))) * G%IdyCv(i,J)
+
+        CAv(i,J,k) = - (q_v * u_v) + fu
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == wenovi_5th_ENSTRO) then
       do J=Jsq,Jeq ; do i=is,ie
@@ -903,8 +915,11 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         else
           abs_vort_v = (2*rel_vort(I-1,J) + 5*rel_vort(I,J) - rel_vort(I+1,J))/6.
         endif  
-        f_v = 0.5 * (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J))
-        CAv(i,J,k) = - (abs_vort_v + f_v) * u_v
+  !      f_v = 0.5 * (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J))
+        fu = - 0.25* &
+            ((G%CoriolisBu(I-1,J)*(u(I-1,j,k) + u(I-1,j+1,k))) + &
+             (G%CoriolisBu(I,J)*(u(I,j,k) + u(I,j+1,k)))) * G%IdyCv(i,J)        
+        CAv(i,J,k) = - (abs_vort_v) * u_v + fu
       enddo ; enddo
     endif
     ! Add in the additonal terms with Arakawa & Lamb.
@@ -924,6 +939,21 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         enddo; enddo
       endif
     endif
+
+    if (CS%bound_Coriolis) then
+      do J=Jsq,Jeq ; do i=is,ie
+        fu1 = -abs_vort(I,J) * u(I,j+1,k)
+        fu2 = -abs_vort(I,J) * u(I,j,k)
+        fu3 = -abs_vort(I-1,J) * u(I-1,j+1,k)
+        fu4 = -abs_vort(I-1,J) * u(I-1,j,k)
+
+        max_fu = max(fu1, fu2, fu3, fu4)
+        min_fu = min(fu1, fu2, fu3, fu4)
+
+        CAv(I,j,k) = min(CAv(I,j,k), max_fu)
+        CAv(I,j,k) = max(CAv(I,j,k), min_fu)
+      enddo ; enddo
+    endif    
 
     ! Term - d(KE)/dy.
     do J=Jsq,Jeq ; do i=is,ie
