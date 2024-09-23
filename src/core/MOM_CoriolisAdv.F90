@@ -660,42 +660,57 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
       do j=js,je ; do I=Isq,Ieq    
         v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
 
-        v_q1 = (v(i+1,J-4,k) + v(i,J-4,k)) * 0.5
-        v_q2 = (v(i+1,J-3,k) + v(i,J-3,k)) * 0.5
-        v_q3 = (v(i+1,J-2,k) + v(i,J-2,k)) * 0.5
-        v_q4 = (v(i+1,J-1,k) + v(i,J-1,k)) * 0.5
-        v_q5 = (v(i+1,J  ,k) + v(i,J  ,k)) * 0.5
-        v_q6 = (v(i+1,J+1,k) + v(i,J+1,k)) * 0.5
-        v_q7 = (v(i+1,J+2,k) + v(i,J+2,k)) * 0.5
-        v_q8 = (v(i+1,J+3,k) + v(i,J+3,k)) * 0.5
-        
-        third_order = (G%mask2dCv(i+1,J-2) * G%mask2dCv(i+1,J-1) * G%mask2dCv(i+1,J) * G%mask2dCv(i+1,J+1) * & 
-                       G%mask2dCv(i,J-2)   * G%mask2dCv(i,J-1)   * G%mask2dCv(i,J)   * G%mask2dCv(i,J+1))
+        u_q1 = (uh(I,j-4,k) + uh(I,j-3,k)) * 0.5 
+        u_q2 = (uh(I,j-3,k) + uh(I,j-2,k)) * 0.5
+        u_q3 = (uh(I,j-2,k) + uh(I,j-1,k)) * 0.5
+        u_q4 = (uh(I,j-1,k) + uh(I,j  ,k)) * 0.5
+        u_q5 = (uh(I,j  ,k) + uh(I,j+1,k)) * 0.5
+        u_q6 = (uh(I,j+1,k) + uh(I,j+2,k)) * 0.5
+        u_q7 = (uh(I,j+2,k) + uh(I,j+3,k)) * 0.5
+        u_q8 = (uh(I,j+3,k) + uh(I,j+4,k)) * 0.5
 
-        fifth_order   = third_order * G%mask2dCv(i+1,J-3) * G%mask2dCv(i,J-3) * G%mask2dCv(i+1,J+2) * G%mask2dCv(i,J+2)
-        seventh_order = fifth_order * G%mask2dCv(i+1,J-4) * G%mask2dCv(i,J-4) * G%mask2dCv(i+1,J+3) * G%mask2dCv(i,J+3)
+        v_q1 = (vh(i+1,J-4,k) + vh(i,J-4,k)) * 0.5
+        v_q2 = (vh(i+1,J-3,k) + vh(i,J-3,k)) * 0.5
+        v_q3 = (vh(i+1,J-2,k) + vh(i,J-2,k)) * 0.5
+        v_q4 = (vh(i+1,J-1,k) + vh(i,J-1,k)) * 0.5
+        v_q5 = (vh(i+1,J  ,k) + vh(i,J  ,k)) * 0.5
+        v_q6 = (vh(i+1,J+1,k) + vh(i,J+1,k)) * 0.5
+        v_q7 = (vh(i+1,J+2,k) + vh(i,J+2,k)) * 0.5
+        v_q8 = (vh(i+1,J+3,k) + vh(i,J+3,k)) * 0.5
+      
+        third_order = (G%mask2dCu(I,j-2) * G%mask2dCu(I,j-1) * G%mask2dCv(I,j) * & 
+                       G%mask2dCu(I,j+1) * G%mask2dCu(I,j+2))
+
+        fifth_order   = third_order * G%mask2dCu(i,j-3) * G%mask2dCu(i,j+3) 
+        seventh_order = fifth_order * G%mask2dCu(I,j-4) * G%mask2dCu(i,j-4)
 
         ! compute the masking to make sure that inland values are not used
         if (seventh_order == 1) then
             ! all values are valid, we use seventh order reconstruction
             call weno_seven_reconstruction(abs_vort(I,J-4),abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), & 
                                            abs_vort(I,J)  ,abs_vort(I,J+1),abs_vort(I,J+2),abs_vort(I,J+3), & 
-                                           v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8, v_u, q_u, CS%weno_velocity_smooth)
+                                           u_q1, u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_q8, v_u, q_u, CS%weno_velocity_smooth)
+
+            ! call weno_seven_reconstruction(abs_vort(I,J-4),abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), & 
+            !                                abs_vort(I,J)  ,abs_vort(I,J+1),abs_vort(I,J+2),abs_vort(I,J+3), & 
+            !                                v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8, v_u, q_uv, CS%weno_velocity_smooth)
+
+            ! q_u = 0.5 * (q_uu + q_uv)
         elseif (fifth_order == 1) then
             ! all values are valid, we use fifth order reconstruction
             call weno_five_reconstruction(abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), &
-                                            abs_vort(I,J),abs_vort(I,J+1),abs_vort(I,J+2),  & 
-                                          v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_u, q_u, CS%weno_velocity_smooth)
+                                          abs_vort(I,J),  abs_vort(I,J+1),abs_vort(I,J+2), & 
+                                          u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, v_u, q_u, CS%weno_velocity_smooth)
 
         elseif (third_order == 1) then
             ! only the middle values are valid, we use third order reconstruction
             call weno_three_reconstruction(abs_vort(I,J-2),abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1), & 
-                                           v_q3, v_q4, v_q5, v_q6, v_u, q_u, CS%weno_velocity_smooth)
+                                           u_q3, u_q4, u_q5, u_q6, v_u, q_u, CS%weno_velocity_smooth)
         else ! Upwind first order
             if (v_u>0.) then
-                q_u = abs_vort(I,J)
+                q_u = abs_vort(I,J-1)
             else
-                q_u = abs_vort(I,J+1)
+                q_u = abs_vort(I,J)
             endif
         endif
 
@@ -786,38 +801,52 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
       do J=Jsq,Jeq ; do i=is,ie
         u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
 
-        u_q1 = (u(I-4,j+1,k) + u(I-4,j,k)) * 0.5
-        u_q2 = (u(I-3,j+1,k) + u(I-3,j,k)) * 0.5
-        u_q3 = (u(I-2,j+1,k) + u(I-2,j,k)) * 0.5
-        u_q4 = (u(I-1,j+1,k) + u(I-1,j,k)) * 0.5
-        u_q5 = (u(I  ,j+1,k) + u(I  ,j,k)) * 0.5
-        u_q6 = (u(I+1,j+1,k) + u(I+1,j,k)) * 0.5
-        u_q7 = (u(I+2,j+1,k) + u(I+2,j,k)) * 0.5
-        u_q8 = (u(I+3,j+1,k) + u(I+3,j,k)) * 0.5
+        u_q1 = (uh(I-4,j+1,k) + uh(I-4,j,k)) * 0.5
+        u_q2 = (uh(I-3,j+1,k) + uh(I-3,j,k)) * 0.5
+        u_q3 = (uh(I-2,j+1,k) + uh(I-2,j,k)) * 0.5
+        u_q4 = (uh(I-1,j+1,k) + uh(I-1,j,k)) * 0.5
+        u_q5 = (uh(I  ,j+1,k) + uh(I  ,j,k)) * 0.5
+        u_q6 = (uh(I+1,j+1,k) + uh(I+1,j,k)) * 0.5
+        u_q7 = (uh(I+2,j+1,k) + uh(I+2,j,k)) * 0.5
+        u_q8 = (uh(I+3,j+1,k) + uh(I+3,j,k)) * 0.5
         
-        third_order = (G%mask2dCu(I-2,j+1) * G%mask2dCu(I-1,j+1) * G%mask2dCu(I,j+1) * G%mask2dCu(I+1,j+1) * & 
-                       G%mask2dCu(I-2,j)   * G%mask2dCu(I-1,j)   * G%mask2dCu(I,j)   * G%mask2dCu(I+1,j))
+        v_q1 = (vh(i-4,J,k) + vh(i-3,J,k)) * 0.5
+        v_q2 = (vh(i-3,J,k) + vh(i-2,J,k)) * 0.5
+        v_q3 = (vh(i-2,J,k) + vh(i-1,J,k)) * 0.5
+        v_q4 = (vh(i-1,J,k) + vh(i  ,J,k)) * 0.5
+        v_q5 = (vh(i  ,J,k) + vh(i+1,J,k)) * 0.5
+        v_q6 = (vh(i+1,J,k) + vh(i+2,J,k)) * 0.5
+        v_q7 = (vh(i+2,J,k) + vh(i+3,J,k)) * 0.5
+        v_q8 = (vh(i+3,J,k) + vh(i+4,J,k)) * 0.5
 
-        fifth_order   = third_order * G%mask2dCu(I-3,j+1) * G%mask2dCu(I-3,j) * G%mask2dCu(I+2,j+1) * G%mask2dCu(I+2,j)
-        seventh_order = fifth_order * G%mask2dCu(I-4,j+1) * G%mask2dCu(I-4,j) * G%mask2dCu(I+3,j+1) * G%mask2dCu(I+3,j)
+        third_order = (G%mask2dCv(i-2,J) * G%mask2dCv(i-1,J) * G%mask2dCv(i,J) * G%mask2dCv(i+1,J) * & 
+                       G%mask2dCv(i+2,J))
+
+        fifth_order   = third_order * G%mask2dCv(i-3,J) * G%mask2dCv(i+3,J) 
+        seventh_order = fifth_order * G%mask2dCv(i-4,J) * G%mask2dCv(i+4,J) 
 
         ! compute the masking to make sure that inland values are not used
         if (seventh_order == 1) then
             ! all values are valid, we use seventh order reconstruction
             call weno_seven_reconstruction(abs_vort(I-4,J),abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), & 
                                            abs_vort(I,J)  ,abs_vort(I+1,J),abs_vort(I+2,J),abs_vort(I+3,J), & 
-                                           u_q1, u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_q8, u_v, q_v, CS%weno_velocity_smooth)
+                                           v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8, u_v, q_v, CS%weno_velocity_smooth)
+
+            ! all values are valid, we use seventh order reconstruction
+            ! call weno_seven_reconstruction(abs_vort(I-4,J),abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), & 
+            !                                abs_vort(I,J)  ,abs_vort(I+1,J),abs_vort(I+2,J),abs_vort(I+3,J), & 
+            !                                u_q1, u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_q8, u_v, q_v, CS%weno_velocity_smooth)
 
         elseif (fifth_order == 1) then
             ! all values are valid, we use fifth order reconstruction
             call weno_five_reconstruction(abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), &
                                           abs_vort(I,J),abs_vort(I+1,J),abs_vort(I+2,J), & 
-                                          u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_v, q_v, CS%weno_velocity_smooth)
+                                          v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, u_v, q_v, CS%weno_velocity_smooth)
 
         elseif (third_order == 1) then
             ! only the middle values are valid, we use third order reconstruction
                 call weno_three_reconstruction(abs_vort(I-2,J),abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J), & 
-                                               u_q3, u_q4, u_q5, u_q6, u_v, q_v, CS%weno_velocity_smooth)
+                                               v_q3, v_q4, v_q5, v_q6, u_v, q_v, CS%weno_velocity_smooth)
         else ! Upwind first order!
             if (u_v>0.) then
                 q_v = abs_vort(I-1,J)
@@ -1024,8 +1053,8 @@ subroutine weno_three_reconstruction(q1, q2, q3, q4, u1, u2, u3, u4, u, qr, velo
     endif
   
     tau = abs(b0-b1)
-    w0  = 2./3. * (1 + (tau / (b0 + 1e-8))**2)
-    w1  = 1./3. * (1 + (tau / (b1 + 1e-8))**2)
+    w0  = 2./3. * (1 + (tau / (b0 + 1e-20))**2)
+    w1  = 1./3. * (1 + (tau / (b1 + 1e-20))**2)
   
     s = 1. / (w0 + w1)
     w0 = w0 * s
@@ -1098,10 +1127,10 @@ subroutine weno_five_reconstruction(q1, q2, q3, q4, q5, q6, u1, u2, u3, u4, u5, 
       endif
     endif
   
-    tau = abs(b0-b2)
-    w0  = 3./10. * (1 + (tau / (b0 + 1e-8))**2)
-    w1  = 3./5.  * (1 + (tau / (b1 + 1e-8))**2)
-    w2  = 1./10. * (1 + (tau / (b2 + 1e-8))**2)
+    tau = abs(b0 - b2)
+    w0  = 3./10. * (1 + (tau / (b0 + 1e-20))**2)
+    w1  = 3./5.  * (1 + (tau / (b1 + 1e-20))**2)
+    w2  = 1./10. * (1 + (tau / (b2 + 1e-20))**2)
   
     s = 1. / (w0 + w1 + w2)
     w0 = w0 * s
@@ -1206,10 +1235,10 @@ subroutine weno_seven_reconstruction(q1, q2, q3, q4, q5, q6, q7, q8, u1, u2, u3,
   endif
 
   tau = abs(b0 + 3 * b1 - 3 * b2 - b3)
-  w0  = 4./35.  * (1 + (tau / (b0 + 1e-8))**2)
-  w1  = 18./35. * (1 + (tau / (b1 + 1e-8))**2)
-  w2  = 12./35. * (1 + (tau / (b2 + 1e-8))**2)
-  w3  = 1./35.  * (1 + (tau / (b3 + 1e-8))**2)
+  w0  = 4./35.  * (1 + (tau / (b0 + 1e-20))**2)
+  w1  = 18./35. * (1 + (tau / (b1 + 1e-20))**2)
+  w2  = 12./35. * (1 + (tau / (b2 + 1e-20))**2)
+  w3  = 1./35.  * (1 + (tau / (b3 + 1e-20))**2)
 
   s = 1. / (w0 + w1 + w2 + w3)
   w0 = w0 * s
