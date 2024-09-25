@@ -865,7 +865,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 
         fu = - 0.25* &
             ((G%CoriolisBu(I-1,J)*(u(I-1,j,k) + u(I-1,j+1,k))) + &
-             (G%CoriolisBu(I,J)*(u(I,j,k) + u(I,j+1,k)))) * G%IdyCv(i,J)
+             (G%CoriolisBu(I,J)*(u(I,j,k) + u(I,j+1,k)))) 
 
         CAv(i,J,k) = - (q_v * u_v) + fu
       enddo ; enddo
@@ -918,7 +918,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   !      f_v = 0.5 * (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J))
         fu = - 0.25* &
             ((G%CoriolisBu(I-1,J)*(u(I-1,j,k) + u(I-1,j+1,k))) + &
-             (G%CoriolisBu(I,J)*(u(I,j,k) + u(I,j+1,k)))) * G%IdyCv(i,J)        
+             (G%CoriolisBu(I,J)*(u(I,j,k) + u(I,j+1,k))))         
         CAv(i,J,k) = - (abs_vort_v) * u_v + fu
       enddo ; enddo
     endif
