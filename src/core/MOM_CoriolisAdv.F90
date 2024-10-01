@@ -99,9 +99,11 @@ integer, parameter :: SADOURNY75_ENSTRO = 4
 integer, parameter :: ARAKAWA_LAMB81    = 5
 integer, parameter :: AL_BLEND          = 6
 integer, parameter :: SECOND_ENSTRO = 7
-integer, parameter :: THIRD_ENSTRO = 8
+integer, parameter :: UP3_ENSTRO = 8
 integer, parameter :: wenovi_7th_ENSTRO = 9
 integer, parameter :: wenovi_5th_ENSTRO = 15
+integer, parameter :: wenovi_7th_split = 16
+integer, parameter :: UP3_split = 17
 character*(20), parameter :: SADOURNY75_ENERGY_STRING = "SADOURNY75_ENERGY"
 character*(20), parameter :: ARAKAWA_HSU_STRING = "ARAKAWA_HSU90"
 character*(20), parameter :: ROBUST_ENSTRO_STRING = "ROBUST_ENSTRO"
@@ -109,17 +111,23 @@ character*(20), parameter :: SADOURNY75_ENSTRO_STRING = "SADOURNY75_ENSTRO"
 character*(20), parameter :: ARAKAWA_LAMB_STRING = "ARAKAWA_LAMB81"
 character*(20), parameter :: AL_BLEND_STRING = "ARAKAWA_LAMB_BLEND"
 character*(20), parameter :: SECOND_ENSTRO_STRING = "SECOND_ENSTRO"
-character*(20), parameter :: THIRD_ENSTRO_STRING = "THIRD_ENSTRO"
+character*(20), parameter :: UP3_ENSTRO_STRING = "UP3_ENSTRO"
+character*(20), parameter :: UP3_SPLIT_STRING = "UP3_SPLIT"
 character*(20), parameter :: WENOVI_5TH_ENSTRO_STRING = "WENOVI_5TH_ENSTRO"
 character*(20), parameter :: WENOVI_7TH_ENSTRO_STRING = "WENOVI_7TH_ENSTRO"
+character*(20), parameter :: WENOVI_7TH_SPLIT_STRING = "WENOVI_7TH_SPLIT"
 !>@}
 !>@{ Enumeration values for KE_Scheme
 integer, parameter :: KE_ARAKAWA        = 10
 integer, parameter :: KE_SIMPLE_GUDONOV = 11
 integer, parameter :: KE_GUDONOV        = 12
+integer, parameter :: KE_UP3            = 13
+integer, parameter :: KE_wenovi_7th     = 14
 character*(20), parameter :: KE_ARAKAWA_STRING = "KE_ARAKAWA"
 character*(20), parameter :: KE_SIMPLE_GUDONOV_STRING = "KE_SIMPLE_GUDONOV"
 character*(20), parameter :: KE_GUDONOV_STRING = "KE_GUDONOV"
+character*(20), parameter :: KE_UP3_STRING = "KE_UP3"
+character*(20), parameter :: KE_WENOVI_7TH_STRING = "KE_WENOVI_7TH"
 !>@}
 !>@{ Enumeration values for PV_Adv_Scheme
 integer, parameter :: PV_ADV_CENTERED   = 21
@@ -679,7 +687,67 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         v_q7 = (vh(i+1,J+2,k) + vh(i,J+2,k)) * 0.5
         v_q8 = (vh(i+1,J+3,k) + vh(i,J+3,k)) * 0.5
       
-        third_order = (G%mask2dCu(I,j-2) * G%mask2dCu(I,j-1) * G%mask2dCv(I,j) * & 
+        third_order = (G%mask2dCu(I,j-2) * G%mask2dCu(I,j-1) * G%mask2dCu(I,j) * & 
+                       G%mask2dCu(I,j+1) * G%mask2dCu(I,j+2))
+
+        fifth_order   = third_order * G%mask2dCu(i,j-3) * G%mask2dCu(i,j+3) 
+        seventh_order = fifth_order * G%mask2dCu(I,j-4) * G%mask2dCu(i,j-4)
+
+        ! compute the masking to make sure that inland values are not used
+        if (seventh_order == 1) then
+            ! all values are valid, we use seventh order reconstruction
+            call weno_seven_reconstruction(abs_vort(I,J-4),abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), & 
+                                           abs_vort(I,J)  ,abs_vort(I,J+1),abs_vort(I,J+2),abs_vort(I,J+3), & 
+                                           u_q1, u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_q8, v_u, q_u, CS%weno_velocity_smooth)
+
+            ! call weno_seven_reconstruction(abs_vort(I,J-4),abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), & 
+            !                                abs_vort(I,J)  ,abs_vort(I,J+1),abs_vort(I,J+2),abs_vort(I,J+3), & 
+            !                                v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8, v_u, q_uv, CS%weno_velocity_smooth)
+
+            ! q_u = 0.5 * (q_uu + q_uv)
+        elseif (fifth_order == 1) then
+            ! all values are valid, we use fifth order reconstruction
+            call weno_five_reconstruction(abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), &
+                                          abs_vort(I,J),  abs_vort(I,J+1),abs_vort(I,J+2), & 
+                                          u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, v_u, q_u, CS%weno_velocity_smooth)
+
+        elseif (third_order == 1) then
+            ! only the middle values are valid, we use third order reconstruction
+            call weno_three_reconstruction(abs_vort(I,J-2),abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1), & 
+                                           u_q3, u_q4, u_q5, u_q6, v_u, q_u, CS%weno_velocity_smooth)
+        else ! Upwind first order
+            if (v_u>0.) then
+                q_u = abs_vort(I,J-1)
+            else
+                q_u = abs_vort(I,J)
+            endif
+        endif
+
+        CAu(I,j,k) = (q_u * v_u) 
+      enddo ; enddo            
+    elseif (CS%Coriolis_Scheme == wenovi_7th_split) then
+      do j=js,je ; do I=Isq,Ieq    
+        v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
+
+        u_q1 = (uh(I,j-4,k) + uh(I,j-3,k)) * 0.5 
+        u_q2 = (uh(I,j-3,k) + uh(I,j-2,k)) * 0.5
+        u_q3 = (uh(I,j-2,k) + uh(I,j-1,k)) * 0.5
+        u_q4 = (uh(I,j-1,k) + uh(I,j  ,k)) * 0.5
+        u_q5 = (uh(I,j  ,k) + uh(I,j+1,k)) * 0.5
+        u_q6 = (uh(I,j+1,k) + uh(I,j+2,k)) * 0.5
+        u_q7 = (uh(I,j+2,k) + uh(I,j+3,k)) * 0.5
+        u_q8 = (uh(I,j+3,k) + uh(I,j+4,k)) * 0.5
+
+      !  v_q1 = (vh(i+1,J-4,k) + vh(i,J-4,k)) * 0.5
+      !  v_q2 = (vh(i+1,J-3,k) + vh(i,J-3,k)) * 0.5
+      !  v_q3 = (vh(i+1,J-2,k) + vh(i,J-2,k)) * 0.5
+      !  v_q4 = (vh(i+1,J-1,k) + vh(i,J-1,k)) * 0.5
+      !  v_q5 = (vh(i+1,J  ,k) + vh(i,J  ,k)) * 0.5
+      !  v_q6 = (vh(i+1,J+1,k) + vh(i,J+1,k)) * 0.5
+      !  v_q7 = (vh(i+1,J+2,k) + vh(i,J+2,k)) * 0.5
+      !  v_q8 = (vh(i+1,J+3,k) + vh(i,J+3,k)) * 0.5
+      
+        third_order = (G%mask2dCu(I,j-2) * G%mask2dCu(I,j-1) * G%mask2dCu(I,j) * & 
                        G%mask2dCu(I,j+1) * G%mask2dCu(I,j+2))
 
         fifth_order   = third_order * G%mask2dCu(i,j-3) * G%mask2dCu(i,j+3) 
@@ -760,7 +828,17 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         CAu(I,j,k) = ((q_u + f_u) * v_u)
       enddo ; enddo
 
-    elseif (CS%Coriolis_Scheme == THIRD_ENSTRO) then
+    elseif (CS%Coriolis_Scheme == UP3_ENSTRO) then
+      do j=js,je ; do I=Isq,Ieq
+        v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
+        if (v_u>0.) then
+          abs_vort_u = (-abs_vort(I,J-2) + 5*abs_vort(I,J-1) + 2*abs_vort(I,J))/6.
+        else
+          abs_vort_u = (2*abs_vort(I,J-1) + 5*abs_vort(I,J) - abs_vort(I,J+1))/6.
+        endif  
+        CAu(I,j,k) = (abs_vort_u) * v_u 
+      enddo ; enddo
+    elseif (CS%Coriolis_Scheme == UP3_split) then
       do j=js,je ; do I=Isq,Ieq
         v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
         if (v_u>0.) then
@@ -806,6 +884,66 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
     ! force and momentum advection.  On a Cartesian grid, this is
     !     CAv = - q * uh - d(KE)/dy.
     if (CS%Coriolis_Scheme == wenovi_7th_ENSTRO) then
+      do J=Jsq,Jeq ; do i=is,ie
+        u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
+
+        u_q1 = (uh(I-4,j+1,k) + uh(I-4,j,k)) * 0.5
+        u_q2 = (uh(I-3,j+1,k) + uh(I-3,j,k)) * 0.5
+        u_q3 = (uh(I-2,j+1,k) + uh(I-2,j,k)) * 0.5
+        u_q4 = (uh(I-1,j+1,k) + uh(I-1,j,k)) * 0.5
+        u_q5 = (uh(I  ,j+1,k) + uh(I  ,j,k)) * 0.5
+        u_q6 = (uh(I+1,j+1,k) + uh(I+1,j,k)) * 0.5
+        u_q7 = (uh(I+2,j+1,k) + uh(I+2,j,k)) * 0.5
+        u_q8 = (uh(I+3,j+1,k) + uh(I+3,j,k)) * 0.5
+        
+        v_q1 = (vh(i-4,J,k) + vh(i-3,J,k)) * 0.5
+        v_q2 = (vh(i-3,J,k) + vh(i-2,J,k)) * 0.5
+        v_q3 = (vh(i-2,J,k) + vh(i-1,J,k)) * 0.5
+        v_q4 = (vh(i-1,J,k) + vh(i  ,J,k)) * 0.5
+        v_q5 = (vh(i  ,J,k) + vh(i+1,J,k)) * 0.5
+        v_q6 = (vh(i+1,J,k) + vh(i+2,J,k)) * 0.5
+        v_q7 = (vh(i+2,J,k) + vh(i+3,J,k)) * 0.5
+        v_q8 = (vh(i+3,J,k) + vh(i+4,J,k)) * 0.5
+
+        third_order = (G%mask2dCv(i-2,J) * G%mask2dCv(i-1,J) * G%mask2dCv(i,J) * G%mask2dCv(i+1,J) * & 
+                       G%mask2dCv(i+2,J))
+
+        fifth_order   = third_order * G%mask2dCv(i-3,J) * G%mask2dCv(i+3,J) 
+        seventh_order = fifth_order * G%mask2dCv(i-4,J) * G%mask2dCv(i+4,J) 
+
+        ! compute the masking to make sure that inland values are not used
+        if (seventh_order == 1) then
+            ! all values are valid, we use seventh order reconstruction
+            call weno_seven_reconstruction(abs_vort(I-4,J),abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), & 
+                                           abs_vort(I,J)  ,abs_vort(I+1,J),abs_vort(I+2,J),abs_vort(I+3,J), & 
+                                           v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8, u_v, q_v, CS%weno_velocity_smooth)
+
+            ! all values are valid, we use seventh order reconstruction
+            ! call weno_seven_reconstruction(abs_vort(I-4,J),abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), & 
+            !                                abs_vort(I,J)  ,abs_vort(I+1,J),abs_vort(I+2,J),abs_vort(I+3,J), & 
+            !                                u_q1, u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_q8, u_v, q_v, CS%weno_velocity_smooth)
+
+        elseif (fifth_order == 1) then
+            ! all values are valid, we use fifth order reconstruction
+            call weno_five_reconstruction(abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), &
+                                          abs_vort(I,J),abs_vort(I+1,J),abs_vort(I+2,J), & 
+                                          v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, u_v, q_v, CS%weno_velocity_smooth)
+
+        elseif (third_order == 1) then
+            ! only the middle values are valid, we use third order reconstruction
+                call weno_three_reconstruction(abs_vort(I-2,J),abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J), & 
+                                               v_q3, v_q4, v_q5, v_q6, u_v, q_v, CS%weno_velocity_smooth)
+        else ! Upwind first order!
+            if (u_v>0.) then
+                q_v = abs_vort(I-1,J)
+            else
+                q_v = abs_vort(I,J)
+            endif
+        endif
+
+        CAv(i,J,k) = - (q_v * u_v)
+      enddo ; enddo
+    elseif (CS%Coriolis_Scheme == wenovi_7th_split) then
       do J=Jsq,Jeq ; do i=is,ie
         u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
 
@@ -907,7 +1045,17 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         f_v = 0.5 * (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J))
         CAv(i,J,k) = - ((q_v + f_v) * u_v)
       enddo ; enddo      
-    elseif (CS%Coriolis_Scheme == THIRD_ENSTRO) then
+    elseif (CS%Coriolis_Scheme == UP3_ENSTRO) then
+      do J=Jsq,Jeq ; do i=is,ie
+        u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
+        if (u_v>0.) then
+          abs_vort_v = (-abs_vort(I-2,J) + 5*abs_vort(I-1,J) + 2*abs_vort(I,J))/6.
+        else
+          abs_vort_v = (2*abs_vort(I-1,J) + 5*abs_vort(I,J) - abs_vort(I+1,J))/6.
+        endif  
+        CAv(i,J,k) = - (abs_vort_v) * u_v
+      enddo ; enddo
+    elseif (CS%Coriolis_Scheme == UP3_split) then
       do J=Jsq,Jeq ; do i=is,ie
         u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
         if (u_v>0.) then
@@ -1365,9 +1513,12 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
   type(unit_scale_type),                      intent(in)  :: US  !< A dimensional unit scaling type
   type(CoriolisAdv_CS),                       intent(in)  :: CS  !< Control structure for MOM_CoriolisAdv
   ! Local variables
-  real :: um, up, vm, vp         ! Temporary variables [L T-1 ~> m s-1].
+  real :: um, un, up, uq, vm, vn, vp, vq         ! Temporary variables [L T-1 ~> m s-1].
   real :: um2, up2, vm2, vp2     ! Temporary variables [L2 T-2 ~> m2 s-2].
   real :: um2a, up2a, vm2a, vp2a ! Temporary variables [L4 T-2 ~> m4 s-2].
+  real :: third_order_u, third_order_v  ! Product of mask values to determine the boundary
+  real :: fifth_order_u, fifth_order_v  ! Product of mask values to determine the boundary
+  real :: seventh_order_u, seventh_order_v  ! Product of mask values to determine the boundary
   integer :: i, j, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz, n
 
   is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec ; nz = GV%ke
@@ -1405,6 +1556,157 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
       vm = 0.5*( v(i, J ,k) - ABS( v(i, J ,k) ) ) ; vm2a = vm*vm*G%areaCv(i, J )
       KE(i,j) = ( max(um2a,up2a) + max(vm2a,vp2a) )*0.5*G%IareaT(i,j)
     enddo ; enddo
+  elseif (CS%KE_Scheme == KE_UP3) then
+    ! The following discretization of KE is based on the one-dimensional third-order
+    ! upwind scheme which does not take horizontal grid factors into account
+    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    ! compute the masking to make sure that inland values are not used
+      third_order_u = (G%mask2dCu(I-2,j) * G%mask2dCu(I-1,j)* &
+                     G%mask2dCu(I,j) * G%mask2dCu(I+1,j))
+
+      if (third_order_u == 1) then
+        up = (-u(I-2,j,k) + 7*u(I-1,j,k) + 7*u(I,j,k) - u(I+1,j,k))/12.
+        if (up>0.) then
+          um = (-u(I-2,j,k) + 5*u(I-1,j,k) + 2*u(I,j,k))/6.
+        elseif (up<0.) then
+          um = (2*u(I-1,j,k) + 5*u(I,j,k) - u(I+1,j,k))/6.
+        else
+          um = up
+        endif
+      else
+        up = (u(I-1,j,k) + u(I,j,k))*0.5
+        if (up>0.) then
+          um = u(I-1,j,k)
+        elseif (up<0.) then
+          um = u(I,j,k)
+        else
+          um = up
+        endif
+      endif
+
+      third_order_v = (G%mask2dCv(i,J-2) * G%mask2dCv(i,J-1)* &
+                     G%mask2dCv(i,J) * G%mask2dCv(i,J+1))  
+      if (third_order_v ==1) then
+        vp = (-v(i,J-2,k) + 7*v(i,J-1,k) + 7*v(i,J,k) - v(i,J+1,k))/12.
+        if (vp>0.) then
+          vm = (-v(i,J-2,k) + 5*v(i,J-1,k) + 2*v(i,J,k))/6.
+        elseif (vp<0.) then
+          vm = (2*v(i,J-1,k) + 5*v(i,J,k) - v(i,J+1,k))/6.
+        else
+          vm = vp
+        endif
+      else
+        vp = (v(i,J-1,k) + v(i,J,k))*0.5
+        if (vp>0.) then
+          vm = v(i,J-1,k)
+        elseif (vp<0.) then
+          vm = v(i,J,k)
+        else
+          vm = vp
+        endif
+      endif
+
+      KE(i,j) = ( um*um + vm*vm )*0.5
+    enddo ; enddo
+  elseif (CS%KE_Scheme == KE_wenovi_7th) then
+    ! The following discretization of KE is based on the one-dimensional third-order
+    ! upwind scheme which does not take horizontal grid factors into account
+    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    ! compute the masking to make sure that inland values are not used
+
+      third_order_u = (G%mask2dCu(I-2,j) * G%mask2dCu(I-1,j) * G%mask2dCu(I,j) * & 
+                     G%mask2dCu(I+1,j)) 
+
+      fifth_order_u   = third_order_u * G%mask2dCu(I-3,j) * G%mask2dCu(I+2,j) 
+      seventh_order_u = fifth_order_u * G%mask2dCu(I-4,j) * G%mask2dCu(I+3,j)*0
+
+      ! compute the masking to make sure that inland values are not used
+      if (seventh_order_u == 1) then
+        ! all values are valid, we use seventh order reconstruction
+        call weno_seven_reconstruction(u(I-4,j,k),u(I-3,j,k),u(I-2,j,k),u(I-1,j,k), & 
+                                       u(I,j,k),u(I+1,j,k),u(I+2,j,k),u(I+3,j,k), & 
+                                       1., 1., 1., 1., 1., 1., 1., 1., 1., up, CS%weno_velocity_smooth)
+        call weno_seven_reconstruction(u(I-4,j,k),u(I-3,j,k),u(I-2,j,k),u(I-1,j,k), & 
+                                       u(I,j,k),u(I+1,j,k),u(I+2,j,k),u(I+3,j,k), & 
+                                       1., 1., 1., 1., 1., 1., 1., 1., -1., uq, CS%weno_velocity_smooth)
+      elseif (fifth_order_u == 1) then
+        ! all values are valid, we use fifth order reconstruction
+        call weno_five_reconstruction(u(I-3,j,k),u(I-2,j,k),u(I-1,j,k), &
+                                      u(I,j,k),  u(I+1,j,k),u(I+2,j,k), & 
+                                       1., 1., 1., 1., 1., 1., 1., up, CS%weno_velocity_smooth)
+        call weno_five_reconstruction(u(I-3,j,k),u(I-2,j,k),u(I-1,j,k), &
+                                      u(I,j,k),  u(I+1,j,k),u(I+2,j,k), & 
+                                       1., 1., 1., 1., 1., 1., -1., uq, CS%weno_velocity_smooth)
+      elseif (third_order_u == 1) then
+        ! only the middle values are valid, we use third order reconstruction
+        call weno_three_reconstruction(u(I-2,j,k),u(I-1,j,k),u(I,j,k),u(I+1,j,k), & 
+                                       1., 1., 1., 1., 1., up, CS%weno_velocity_smooth)
+        call weno_three_reconstruction(u(I-2,j,k),u(I-1,j,k),u(I,j,k),u(I+1,j,k), & 
+                                       1., 1., 1., 1., -1., uq, CS%weno_velocity_smooth)
+      else ! Upwind first order
+        up = u(I-1,j,k)
+        uq = u(I,j,k)
+      endif
+      un = (up + uq)*0.5
+      !um = (SIGN(1., un)*0.5*up - SIGN(1., un)*0.5*uq) + un ! um becomes up if un is 0
+      if (un>0.) then
+        um = up
+      elseif (un<0.) then
+        um = uq
+      else
+        um = 0.
+      endif
+
+
+    ! compute the masking to make sure that inland values are not used
+
+      third_order_v = (G%mask2dCv(i,J-2) * G%mask2dCv(i,J-1) * G%mask2dCv(i,J) * & 
+                     G%mask2dCv(i,J+1)) 
+
+      fifth_order_v   = third_order_v * G%mask2dCv(i,J-3) * G%mask2dCv(i,J+2) 
+      seventh_order_v = fifth_order_v * G%mask2dCv(i,J-4) * G%mask2dCv(i,J+3)*0
+
+      ! compute the masking to make sure that inland values are not used
+      if (seventh_order_v == 1) then
+        ! all values are valid, we use seventh order reconstruction
+        call weno_seven_reconstruction(v(i,J-4,k),v(i,J-3,k),v(i,J-2,k),v(i,J-1,k), & 
+                                       v(i,J,k),v(i,J+1,k),v(i,J+2,k),v(i,J+3,k), & 
+                                       1., 1., 1., 1., 1., 1., 1., 1., 1., vp, CS%weno_velocity_smooth)
+        call weno_seven_reconstruction(v(i,J-4,k),v(i,J-3,k),v(i,J-2,k),v(i,J-1,k), & 
+                                       v(i,J,k),v(i,J+1,k),v(i,J+2,k),v(i,J+3,k), & 
+                                       1., 1., 1., 1., 1., 1., 1., 1., -1., vq, CS%weno_velocity_smooth)
+      elseif (fifth_order_v == 1) then
+        ! all values are valid, we use fifth order reconstruction
+        call weno_five_reconstruction(v(i,J-3,k),v(i,J-2,k),v(i,J-1,k), &
+                                      v(i,J,k),  v(i,J+1,k),v(i,J+2,k), & 
+                                       1., 1., 1., 1., 1., 1., 1., vp, CS%weno_velocity_smooth)
+        call weno_five_reconstruction(v(i,J-3,k),v(i,J-2,k),v(i,J-1,k), &
+                                      v(i,J,k),  v(i,J+1,k),v(i,J+2,k), & 
+                                       1., 1., 1., 1., 1., 1., -1., vq, CS%weno_velocity_smooth)
+      elseif (third_order_v == 1) then
+        ! only the middle values are valid, we use third order reconstruction
+        call weno_three_reconstruction(v(i,J-2,k),v(i,J-1,k),v(i,J,k),v(i,J+1,k), & 
+                                       1., 1., 1., 1., 1., vp, CS%weno_velocity_smooth)
+        call weno_three_reconstruction(v(i,J-2,k),v(i,J-1,k),v(i,J,k),v(i,J+1,k), & 
+                                       1., 1., 1., 1., -1., vq, CS%weno_velocity_smooth)
+      else ! Upwind first order
+        vp = v(i,J-1,k)
+        vq = v(i,J,k)
+      endif
+      vn = (vp + vq)*0.5
+     ! vm = (SIGN(1., vn)*0.5*vp - SIGN(1., vn)*0.5*vq) + vn ! vm becomes vp if vn is 0
+      if (vn>0.) then
+        vm = vp
+      elseif (vn<0.) then
+        vm = vq
+      else
+        vm = 0.
+      endif
+
+      KE(i,j) = ( um*um + vm*vm )*0.5
+    enddo ; enddo
+    
+
   endif
 
   ! Term - d(KE)/dx.
@@ -1485,9 +1787,12 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
                  "\t ARAKAWA_LAMB_BLEND - A blend of Arakawa & Lamb with \n"//&
                  "\t                      Arakawa & Hsu and Sadourny energy \n"//&
                  "\t SECOND_ENSTRO - 2nd-order enstrophy cons. \n"//&
-                 "\t THIRD_ENSTRO - 3rd-order enstrophy cons. \n"//&
+                 "\t UP3_ENSTRO - 3rd-order enstrophy cons. \n"//&
+                 "\t UP3_SPLIT - 3rd-order enstrophy cons. \n"//&
                  "\t WENOVI_5TH_ENSTRO - 5th-order enstrophy cons. \n"//&
+                 "\t WENOVI_7TH_SPLIT - 7th-order enstrophy cons. \n"//&
                  "\t WENOVI_7TH_ENSTRO - 7th-order enstrophy cons.",&
+
                  default=SADOURNY75_ENERGY_STRING)
   tmpstr = uppercase(tmpstr)
   select case (tmpstr)
@@ -1506,10 +1811,14 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
       CS%Coriolis_En_Dis = .false.
     case (SECOND_ENSTRO_STRING)
       CS%Coriolis_Scheme = SECOND_ENSTRO
-    case (THIRD_ENSTRO_STRING)
-      CS%Coriolis_Scheme = THIRD_ENSTRO
+    case (UP3_ENSTRO_STRING)
+      CS%Coriolis_Scheme = UP3_ENSTRO
+    case (UP3_SPLIT_STRING)
+      CS%Coriolis_Scheme = UP3_split
     case (WENOVI_7TH_ENSTRO_STRING)
       CS%Coriolis_Scheme = wenovi_7th_ENSTRO      
+    case (WENOVI_7TH_SPLIT_STRING)
+      CS%Coriolis_Scheme = wenovi_7th_split      
     case (WENOVI_5TH_ENSTRO_STRING)
       CS%Coriolis_Scheme = wenovi_5th_ENSTRO      
     case default
@@ -1563,13 +1872,16 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
   call get_param(param_file, mdl, "KE_SCHEME", tmpstr, &
                  "KE_SCHEME selects the discretization for acceleration "//&
                  "due to the kinetic energy gradient. Valid values are: \n"//&
-                 "\t KE_ARAKAWA, KE_SIMPLE_GUDONOV, KE_GUDONOV", &
+                 "\t KE_ARAKAWA, KE_SIMPLE_GUDONOV, KE_GUDONOV, KE_UP3, &
+                 KE_WENOVI_7TH", &
                  default=KE_ARAKAWA_STRING)
   tmpstr = uppercase(tmpstr)
   select case (tmpstr)
     case (KE_ARAKAWA_STRING); CS%KE_Scheme = KE_ARAKAWA
     case (KE_SIMPLE_GUDONOV_STRING); CS%KE_Scheme = KE_SIMPLE_GUDONOV
     case (KE_GUDONOV_STRING); CS%KE_Scheme = KE_GUDONOV
+    case (KE_UP3_STRING); CS%KE_Scheme = KE_UP3
+    case (KE_WENOVI_7TH_STRING); CS%KE_Scheme = KE_wenovi_7th
     case default
       call MOM_mesg('CoriolisAdv_init: KE_Scheme ="'//trim(tmpstr)//'"', 0)
       call MOM_error(FATAL, "CoriolisAdv_init: "// &
