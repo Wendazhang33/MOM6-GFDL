@@ -251,6 +251,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   real :: abs_vort_u, abs_vort_v  ! absolute vorticity at u and v points
   real :: f_u, f_v      ! Coriolis coefficient at u and v points
   real :: fv, fu        ! f*v at u point and -f*u at v point
+!  real :: theta, psi    ! temperory variables for UP3 limiter
 
 ! To work, the following fields must be set outside of the usual
 ! is to ie range before this subroutine is called:
@@ -831,11 +832,19 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
     elseif (CS%Coriolis_Scheme == UP3_ENSTRO) then
       do j=js,je ; do I=Isq,Ieq
         v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
-        if (v_u>0.) then
-          abs_vort_u = (-abs_vort(I,J-2) + 5*abs_vort(I,J-1) + 2*abs_vort(I,J))/6.
-        else
-          abs_vort_u = (2*abs_vort(I,J-1) + 5*abs_vort(I,J) - abs_vort(I,J+1))/6.
-        endif  
+        call UP3_limiter_reconstruction(abs_vort(I,J-2), abs_vort(I,J-1),&
+                abs_vort(I,J), abs_vort(I,J+1), v_u, abs_vort_u)
+!        if (v_u>0.) then
+!          abs_vort_u = (-abs_vort(I,J-2) + 5*abs_vort(I,J-1) + 2*abs_vort(I,J))/6.
+!          theta = (abs_vort(I,J-1) - abs_vort(I,J-2))/(abs_vort(I,J) - abs_vort(I,J-1) + 1e-20)
+!          psi = max(0., min(1., 1/3. + 1/6.*theta, theta))
+!          abs_vort_u = abs_vort(I,J-1) + psi*(abs_vort(I,J) - abs_vort(I,J-1))
+!        else
+!          abs_vort_u = (2*abs_vort(I,J-1) + 5*abs_vort(I,J) - abs_vort(I,J+1))/6.
+!          theta = (abs_vort(I,J+1) - abs_vort(I,J))/(abs_vort(I,J) - abs_vort(I,J-1) + 1e-20)
+!          psi = max(0., min(1., 1/3. + 1/6.*theta, theta))
+!          abs_vort_u = abs_vort(I,J) + psi*(abs_vort(I,J-1) - abs_vort(I,J))
+!        endif  
         CAu(I,j,k) = (abs_vort_u) * v_u 
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == UP3_split) then
@@ -1048,11 +1057,19 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
     elseif (CS%Coriolis_Scheme == UP3_ENSTRO) then
       do J=Jsq,Jeq ; do i=is,ie
         u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
-        if (u_v>0.) then
-          abs_vort_v = (-abs_vort(I-2,J) + 5*abs_vort(I-1,J) + 2*abs_vort(I,J))/6.
-        else
-          abs_vort_v = (2*abs_vort(I-1,J) + 5*abs_vort(I,J) - abs_vort(I+1,J))/6.
-        endif  
+        call UP3_limiter_reconstruction(abs_vort(I-2,J), abs_vort(I-1,J),&
+                abs_vort(I,J), abs_vort(I+1,J), u_v, abs_vort_v) 
+!        if (u_v>0.) then
+!!          abs_vort_v = (-abs_vort(I-2,J) + 5*abs_vort(I-1,J) + 2*abs_vort(I,J))/6.
+!          theta = (abs_vort(I-1,J) - abs_vort(I-2,J))/(abs_vort(I,J) - abs_vort(I-1,J) + 1e-20)
+!          psi = max(0., min(1., 1/3. + 1/6.*theta, theta))
+!          abs_vort_v = abs_vort(I-1,J) + psi*(abs_vort(I,J) - abs_vort(I-1,J))
+!        else
+!!          abs_vort_v = (2*abs_vort(I-1,J) + 5*abs_vort(I,J) - abs_vort(I+1,J))/6.
+!          theta = (abs_vort(I+1,J) - abs_vort(I,J))/(abs_vort(I,J) - abs_vort(I-1,J) + 1e-20)
+!          psi = max(0., min(1., 1/3. + 1/6.*theta, theta))
+!          abs_vort_v = abs_vort(I,J) + psi*(abs_vort(I-1,J) - abs_vort(I,J))
+!        endif  
         CAv(i,J,k) = - (abs_vort_v) * u_v
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == UP3_split) then
@@ -1196,6 +1213,24 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   endif
 
 end subroutine CorAdCalc
+
+subroutine UP3_limiter_reconstruction(q1,q2,q3,q4,u,qr)
+  real, intent(in)    :: q1, q2, q3, q4
+  real, intent(in)    :: u
+  real, intent(inout) :: qr
+  real                :: theta, psi
+
+  if (u>0.) then
+    theta = (q2 - q1)/(q3 - q2 + 1e-20)
+    psi = max(0., min(1., 1/3. + 1/6.*theta, theta)) ! limiter introduced by Koren (1993)
+    qr = q2 + psi*(q3 - q2)
+  else
+    theta = (q4 - q3)/(q3 - q2 + 1e-20)
+    psi = max(0., min(1., 1/3. + 1/6.*theta, theta))
+    qr = q3 + psi*(q2 - q3)
+  endif  
+
+end subroutine UP3_limiter_reconstruction
 
 subroutine weno_three_reconstruction(q1, q2, q3, q4, u1, u2, u3, u4, u, qr, velocity_smoothing)
     real, intent(in)    :: q1, q2, q3, q4
@@ -1566,13 +1601,15 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
 
       if (third_order_u == 1) then
         up = (-u(I-2,j,k) + 7*u(I-1,j,k) + 7*u(I,j,k) - u(I+1,j,k))/12.
-        if (up>0.) then
-          um = (-u(I-2,j,k) + 5*u(I-1,j,k) + 2*u(I,j,k))/6.
-        elseif (up<0.) then
-          um = (2*u(I-1,j,k) + 5*u(I,j,k) - u(I+1,j,k))/6.
-        else
-          um = up
-        endif
+        call UP3_limiter_reconstruction(u(I-2,j,k), u(I-1,j,k),&
+                u(I,j,k), u(I+1,j,k), up, um)
+!        if (up>0.) then
+!          um = (-u(I-2,j,k) + 5*u(I-1,j,k) + 2*u(I,j,k))/6.
+!        elseif (up<0.) then
+!          um = (2*u(I-1,j,k) + 5*u(I,j,k) - u(I+1,j,k))/6.
+!        else
+!          um = up
+!        endif
       else
         up = (u(I-1,j,k) + u(I,j,k))*0.5
         if (up>0.) then
@@ -1588,13 +1625,15 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
                      G%mask2dCv(i,J) * G%mask2dCv(i,J+1))  
       if (third_order_v ==1) then
         vp = (-v(i,J-2,k) + 7*v(i,J-1,k) + 7*v(i,J,k) - v(i,J+1,k))/12.
-        if (vp>0.) then
-          vm = (-v(i,J-2,k) + 5*v(i,J-1,k) + 2*v(i,J,k))/6.
-        elseif (vp<0.) then
-          vm = (2*v(i,J-1,k) + 5*v(i,J,k) - v(i,J+1,k))/6.
-        else
-          vm = vp
-        endif
+        call UP3_limiter_reconstruction(v(i,J-2,k), v(i,J-1,k),&
+                v(i,J,k), v(i,J+1,k), vp, vm)
+!        if (vp>0.) then
+!          vm = (-v(i,J-2,k) + 5*v(i,J-1,k) + 2*v(i,J,k))/6.
+!        elseif (vp<0.) then
+!          vm = (2*v(i,J-1,k) + 5*v(i,J,k) - v(i,J+1,k))/6.
+!        else
+!          vm = vp
+!        endif
       else
         vp = (v(i,J-1,k) + v(i,J,k))*0.5
         if (vp>0.) then
