@@ -104,6 +104,7 @@ integer, parameter :: wenovi_7th_ENSTRO = 9
 integer, parameter :: wenovi_5th_ENSTRO = 15
 integer, parameter :: wenovi_7th_split = 16
 integer, parameter :: UP3_split = 17
+integer, parameter :: UP3_PV_ENSTRO = 18
 character*(20), parameter :: SADOURNY75_ENERGY_STRING = "SADOURNY75_ENERGY"
 character*(20), parameter :: ARAKAWA_HSU_STRING = "ARAKAWA_HSU90"
 character*(20), parameter :: ROBUST_ENSTRO_STRING = "ROBUST_ENSTRO"
@@ -113,6 +114,7 @@ character*(20), parameter :: AL_BLEND_STRING = "ARAKAWA_LAMB_BLEND"
 character*(20), parameter :: SECOND_ENSTRO_STRING = "SECOND_ENSTRO"
 character*(20), parameter :: UP3_ENSTRO_STRING = "UP3_ENSTRO"
 character*(20), parameter :: UP3_SPLIT_STRING = "UP3_SPLIT"
+character*(20), parameter :: UP3_PV_ENSTRO_STRING = "UP3_PV_ENSTRO"
 character*(20), parameter :: WENOVI_5TH_ENSTRO_STRING = "WENOVI_5TH_ENSTRO"
 character*(20), parameter :: WENOVI_7TH_ENSTRO_STRING = "WENOVI_7TH_ENSTRO"
 character*(20), parameter :: WENOVI_7TH_SPLIT_STRING = "WENOVI_7TH_SPLIT"
@@ -834,18 +836,14 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
         call UP3_limiter_reconstruction(abs_vort(I,J-2), abs_vort(I,J-1),&
                 abs_vort(I,J), abs_vort(I,J+1), v_u, abs_vort_u)
-!        if (v_u>0.) then
-!          abs_vort_u = (-abs_vort(I,J-2) + 5*abs_vort(I,J-1) + 2*abs_vort(I,J))/6.
-!          theta = (abs_vort(I,J-1) - abs_vort(I,J-2))/(abs_vort(I,J) - abs_vort(I,J-1) + 1e-20)
-!          psi = max(0., min(1., 1/3. + 1/6.*theta, theta))
-!          abs_vort_u = abs_vort(I,J-1) + psi*(abs_vort(I,J) - abs_vort(I,J-1))
-!        else
-!          abs_vort_u = (2*abs_vort(I,J-1) + 5*abs_vort(I,J) - abs_vort(I,J+1))/6.
-!          theta = (abs_vort(I,J+1) - abs_vort(I,J))/(abs_vort(I,J) - abs_vort(I,J-1) + 1e-20)
-!          psi = max(0., min(1., 1/3. + 1/6.*theta, theta))
-!          abs_vort_u = abs_vort(I,J) + psi*(abs_vort(I,J-1) - abs_vort(I,J))
-!        endif  
         CAu(I,j,k) = (abs_vort_u) * v_u 
+      enddo ; enddo
+    elseif (CS%Coriolis_Scheme == UP3_PV_ENSTRO) then
+      do j=js,je ; do I=Isq,Ieq
+        v_u = 0.25*G%IdxCu(I,j)*((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
+        call UP3_limiter_reconstruction(q(I,J-2), q(I,J-1),&
+                q(I,J), q(I,J+1), v_u, q_u)
+        CAu(I,j,k) = (q_u) * v_u 
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == UP3_split) then
       do j=js,je ; do I=Isq,Ieq
@@ -1059,18 +1057,14 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
         call UP3_limiter_reconstruction(abs_vort(I-2,J), abs_vort(I-1,J),&
                 abs_vort(I,J), abs_vort(I+1,J), u_v, abs_vort_v) 
-!        if (u_v>0.) then
-!!          abs_vort_v = (-abs_vort(I-2,J) + 5*abs_vort(I-1,J) + 2*abs_vort(I,J))/6.
-!          theta = (abs_vort(I-1,J) - abs_vort(I-2,J))/(abs_vort(I,J) - abs_vort(I-1,J) + 1e-20)
-!          psi = max(0., min(1., 1/3. + 1/6.*theta, theta))
-!          abs_vort_v = abs_vort(I-1,J) + psi*(abs_vort(I,J) - abs_vort(I-1,J))
-!        else
-!!          abs_vort_v = (2*abs_vort(I-1,J) + 5*abs_vort(I,J) - abs_vort(I+1,J))/6.
-!          theta = (abs_vort(I+1,J) - abs_vort(I,J))/(abs_vort(I,J) - abs_vort(I-1,J) + 1e-20)
-!          psi = max(0., min(1., 1/3. + 1/6.*theta, theta))
-!          abs_vort_v = abs_vort(I,J) + psi*(abs_vort(I-1,J) - abs_vort(I,J))
-!        endif  
         CAv(i,J,k) = - (abs_vort_v) * u_v
+      enddo ; enddo
+    elseif (CS%Coriolis_Scheme == UP3_PV_ENSTRO) then
+      do J=Jsq,Jeq ; do i=is,ie
+        u_v = 0.25*G%IdyCv(i,J)*((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
+        call UP3_limiter_reconstruction(q(I-2,J), q(I-1,J),&
+                q(I,J), q(I+1,J), u_v, q_v) 
+        CAv(i,J,k) = - (q_v) * u_v
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == UP3_split) then
       do J=Jsq,Jeq ; do i=is,ie
@@ -1827,6 +1821,7 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
                  "\t                      Arakawa & Hsu and Sadourny energy \n"//&
                  "\t SECOND_ENSTRO - 2nd-order enstrophy cons. \n"//&
                  "\t UP3_ENSTRO - 3rd-order enstrophy cons. \n"//&
+                 "\t UP3_PV_ENSTRO - 3rd-order PV enstrophy cons. \n"//&
                  "\t UP3_SPLIT - 3rd-order enstrophy cons. \n"//&
                  "\t WENOVI_5TH_ENSTRO - 5th-order enstrophy cons. \n"//&
                  "\t WENOVI_7TH_SPLIT - 7th-order enstrophy cons. \n"//&
@@ -1852,6 +1847,8 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
       CS%Coriolis_Scheme = SECOND_ENSTRO
     case (UP3_ENSTRO_STRING)
       CS%Coriolis_Scheme = UP3_ENSTRO
+    case (UP3_PV_ENSTRO_STRING)
+      CS%Coriolis_Scheme = UP3_PV_ENSTRO
     case (UP3_SPLIT_STRING)
       CS%Coriolis_Scheme = UP3_split
     case (WENOVI_7TH_ENSTRO_STRING)
