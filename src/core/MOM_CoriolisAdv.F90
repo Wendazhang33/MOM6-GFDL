@@ -105,6 +105,7 @@ integer, parameter :: wenovi_5th_ENSTRO = 15
 integer, parameter :: wenovi_7th_split = 16
 integer, parameter :: UP3_split = 17
 integer, parameter :: UP3_PV_ENSTRO = 18
+integer, parameter :: CEN4_ENSTRO = 19
 character*(20), parameter :: SADOURNY75_ENERGY_STRING = "SADOURNY75_ENERGY"
 character*(20), parameter :: ARAKAWA_HSU_STRING = "ARAKAWA_HSU90"
 character*(20), parameter :: ROBUST_ENSTRO_STRING = "ROBUST_ENSTRO"
@@ -118,6 +119,7 @@ character*(20), parameter :: UP3_PV_ENSTRO_STRING = "UP3_PV_ENSTRO"
 character*(20), parameter :: WENOVI_5TH_ENSTRO_STRING = "WENOVI_5TH_ENSTRO"
 character*(20), parameter :: WENOVI_7TH_ENSTRO_STRING = "WENOVI_7TH_ENSTRO"
 character*(20), parameter :: WENOVI_7TH_SPLIT_STRING = "WENOVI_7TH_SPLIT"
+character*(20), parameter :: CEN4_ENSTRO_STRING = "CEN4_ENSTRO"
 !>@}
 !>@{ Enumeration values for KE_Scheme
 integer, parameter :: KE_ARAKAWA        = 10
@@ -859,6 +861,13 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
            (G%CoriolisBu(I,J-1) * (v(i,J-1,k) + v(i+1,J-1,k))))       
         CAu(I,j,k) = (abs_vort_u) * v_u + fv
       enddo ; enddo
+    elseif (CS%Coriolis_Scheme == CEN4_ENSTRO) then
+      do j=js,je ; do I=Isq,Ieq
+        v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
+        call CEN4_reconstruction(abs_vort(I,J-2), abs_vort(I,J-1),&
+                abs_vort(I,J), abs_vort(I,J+1), abs_vort_u)
+        CAu(I,j,k) = (abs_vort_u) * v_u
+      enddo ; enddo
     endif
 
     if (CS%bound_Coriolis) then
@@ -1080,6 +1089,13 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
              (G%CoriolisBu(I,J)*(u(I,j,k) + u(I,j+1,k))))         
         CAv(i,J,k) = - (abs_vort_v) * u_v + fu
       enddo ; enddo
+    elseif (CS%Coriolis_Scheme == CEN4_ENSTRO) then
+      do J=Jsq,Jeq ; do i=is,ie
+        u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
+        call CEN4_reconstruction(abs_vort(I-2,J), abs_vort(I-1,J),&
+                abs_vort(I,J), abs_vort(I+1,J), abs_vort_v) 
+        CAv(i,J,k) = - (abs_vort_v) * u_v
+      enddo ; enddo
     endif
     ! Add in the additonal terms with Arakawa & Lamb.
     if ((CS%Coriolis_Scheme == ARAKAWA_LAMB81) .or. &
@@ -1226,6 +1242,14 @@ subroutine UP3_limiter_reconstruction(q1,q2,q3,q4,u,qr)
 
 end subroutine UP3_limiter_reconstruction
 
+subroutine CEN4_reconstruction(q1,q2,q3,q4,qr)
+  real, intent(in)    :: q1, q2, q3, q4
+  real, intent(inout) :: qr
+
+  qr = (-q1 + 7*q2 + 7*q3 - q4)/12.
+
+end subroutine CEN4_reconstruction
+
 subroutine weno_three_reconstruction(q1, q2, q3, q4, u1, u2, u3, u4, u, qr, velocity_smoothing)
     real, intent(in)    :: q1, q2, q3, q4
     real, intent(in)    :: u1, u2, u3, u4
@@ -1260,8 +1284,8 @@ subroutine weno_three_reconstruction(q1, q2, q3, q4, u1, u2, u3, u4, u, qr, velo
     endif
   
     tau = abs(b0-b1)
-    w0  = 2./3. * (1 + (tau / (b0 + 1e-20))**2)
-    w1  = 1./3. * (1 + (tau / (b1 + 1e-20))**2)
+    w0  = 2./3. * (1 + (tau / (b0 + 1e-20))**4)
+    w1  = 1./3. * (1 + (tau / (b1 + 1e-20))**4)
   
     s = 1. / (w0 + w1)
     w0 = w0 * s
@@ -1335,9 +1359,9 @@ subroutine weno_five_reconstruction(q1, q2, q3, q4, q5, q6, u1, u2, u3, u4, u5, 
     endif
   
     tau = abs(b0 - b2)
-    w0  = 3./10. * (1 + (tau / (b0 + 1e-20))**2)
-    w1  = 3./5.  * (1 + (tau / (b1 + 1e-20))**2)
-    w2  = 1./10. * (1 + (tau / (b2 + 1e-20))**2)
+    w0  = 3./10. * (1 + (tau / (b0 + 1e-20))**4)
+    w1  = 3./5.  * (1 + (tau / (b1 + 1e-20))**4)
+    w2  = 1./10. * (1 + (tau / (b2 + 1e-20))**4)
   
     s = 1. / (w0 + w1 + w2)
     w0 = w0 * s
@@ -1442,10 +1466,10 @@ subroutine weno_seven_reconstruction(q1, q2, q3, q4, q5, q6, q7, q8, u1, u2, u3,
   endif
 
   tau = abs(b0 + 3 * b1 - 3 * b2 - b3)
-  w0  = 4./35.  * (1 + (tau / (b0 + 1e-20))**2)
-  w1  = 18./35. * (1 + (tau / (b1 + 1e-20))**2)
-  w2  = 12./35. * (1 + (tau / (b2 + 1e-20))**2)
-  w3  = 1./35.  * (1 + (tau / (b3 + 1e-20))**2)
+  w0  = 4./35.  * (1 + (tau / (b0 + 1e-20))**4)
+  w1  = 18./35. * (1 + (tau / (b1 + 1e-20))**4)
+  w2  = 12./35. * (1 + (tau / (b2 + 1e-20))**4)
+  w3  = 1./35.  * (1 + (tau / (b3 + 1e-20))**4)
 
   s = 1. / (w0 + w1 + w2 + w3)
   w0 = w0 * s
@@ -1823,6 +1847,7 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
                  "\t UP3_ENSTRO - 3rd-order enstrophy cons. \n"//&
                  "\t UP3_PV_ENSTRO - 3rd-order PV enstrophy cons. \n"//&
                  "\t UP3_SPLIT - 3rd-order enstrophy cons. \n"//&
+                 "\t CEN4_ENSTRO - 4th-order enstrophy cons. \n"//&
                  "\t WENOVI_5TH_ENSTRO - 5th-order enstrophy cons. \n"//&
                  "\t WENOVI_7TH_SPLIT - 7th-order enstrophy cons. \n"//&
                  "\t WENOVI_7TH_ENSTRO - 7th-order enstrophy cons.",&
@@ -1851,12 +1876,14 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
       CS%Coriolis_Scheme = UP3_PV_ENSTRO
     case (UP3_SPLIT_STRING)
       CS%Coriolis_Scheme = UP3_split
+    case (CEN4_ENSTRO_STRING)
+      CS%Coriolis_Scheme = CEN4_ENSTRO
     case (WENOVI_7TH_ENSTRO_STRING)
       CS%Coriolis_Scheme = wenovi_7th_ENSTRO      
     case (WENOVI_7TH_SPLIT_STRING)
       CS%Coriolis_Scheme = wenovi_7th_split      
     case (WENOVI_5TH_ENSTRO_STRING)
-      CS%Coriolis_Scheme = wenovi_5th_ENSTRO      
+      CS%Coriolis_Scheme = wenovi_5th_ENSTRO
     case default
       call MOM_mesg('CoriolisAdv_init: Coriolis_Scheme ="'//trim(tmpstr)//'"', 0)
       call MOM_error(FATAL, "CoriolisAdv_init: Unrecognized setting "// &
