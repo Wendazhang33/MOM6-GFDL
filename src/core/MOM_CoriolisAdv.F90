@@ -696,8 +696,8 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         third_order = (G%mask2dCu(I,j-2) * G%mask2dCu(I,j-1) * G%mask2dCu(I,j) * & 
                        G%mask2dCu(I,j+1) * G%mask2dCu(I,j+2))
 
-        fifth_order   = third_order * G%mask2dCu(i,j-3) * G%mask2dCu(i,j+3) 
-        seventh_order = fifth_order * G%mask2dCu(I,j-4) * G%mask2dCu(i,j-4)
+        fifth_order   = third_order * G%mask2dCu(I,j-3) * G%mask2dCu(I,j+3) 
+        seventh_order = fifth_order * G%mask2dCu(I,j-4) * G%mask2dCu(I,j-4)
 
         ! compute the masking to make sure that inland values are not used
         if (seventh_order == 1) then
@@ -756,8 +756,8 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         third_order = (G%mask2dCu(I,j-2) * G%mask2dCu(I,j-1) * G%mask2dCu(I,j) * & 
                        G%mask2dCu(I,j+1) * G%mask2dCu(I,j+2))
 
-        fifth_order   = third_order * G%mask2dCu(i,j-3) * G%mask2dCu(i,j+3) 
-        seventh_order = fifth_order * G%mask2dCu(I,j-4) * G%mask2dCu(i,j-4)
+        fifth_order   = third_order * G%mask2dCu(I,j-3) * G%mask2dCu(I,j+3) 
+        seventh_order = fifth_order * G%mask2dCu(I,j-4) * G%mask2dCu(I,j-4)
 
         ! compute the masking to make sure that inland values are not used
         if (seventh_order == 1) then
@@ -789,9 +789,12 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
             endif
         endif
 
-        fv = 0.25 * &
-          ((G%CoriolisBu(I,J) * (v(i+1,J,k) + v(i,J,k))) + &
-           (G%CoriolisBu(I,J-1) * (v(i,J-1,k) + v(i+1,J-1,k))))  
+!        fv = 0.25 * &
+!          ((G%CoriolisBu(I,J) * (v(i+1,J,k) + v(i,J,k))) + &
+!           (G%CoriolisBu(I,J-1) * (v(i,J-1,k) + v(i+1,J-1,k))))  
+        fv = 0.25 * G%IdxCu(I,j) * &
+          ((G%CoriolisBu(I,J) * Ih_q(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
+           (G%CoriolisBu(I,J-1) * Ih_q(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k))))  
 
         CAu(I,j,k) = (q_u * v_u) + fv
       enddo ; enddo            
@@ -1018,9 +1021,12 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
             endif
         endif
 
-        fu = - 0.25* &
-            ((G%CoriolisBu(I-1,J)*(u(I-1,j,k) + u(I-1,j+1,k))) + &
-             (G%CoriolisBu(I,J)*(u(I,j,k) + u(I,j+1,k)))) 
+!        fu = - 0.25* &
+!            ((G%CoriolisBu(I-1,J)*(u(I-1,j,k) + u(I-1,j+1,k))) + &
+!             (G%CoriolisBu(I,J)*(u(I,j,k) + u(I,j+1,k)))) 
+        fu = - 0.25 * G%IdyCv(i,J) * &
+            ((G%CoriolisBu(I-1,J)*Ih_q(I-1,J)*(uh(I-1,j,k) + uh(I-1,j+1,k))) + &
+             (G%CoriolisBu(I,J)*Ih_q(I,J)*(uh(I,j,k) + uh(I,j+1,k))))         
 
         CAv(i,J,k) = - (q_v * u_v) + fu
       enddo ; enddo
@@ -1284,8 +1290,8 @@ subroutine weno_three_reconstruction(q1, q2, q3, q4, u1, u2, u3, u4, u, qr, velo
     endif
   
     tau = abs(b0-b1)
-    w0  = 2./3. * (1 + (tau / (b0 + 1e-20))**4)
-    w1  = 1./3. * (1 + (tau / (b1 + 1e-20))**4)
+    w0  = 2./3. * (1 + (tau / (b0 + 1e-20))**2)
+    w1  = 1./3. * (1 + (tau / (b1 + 1e-20))**2)
   
     s = 1. / (w0 + w1)
     w0 = w0 * s
@@ -1359,9 +1365,9 @@ subroutine weno_five_reconstruction(q1, q2, q3, q4, q5, q6, u1, u2, u3, u4, u5, 
     endif
   
     tau = abs(b0 - b2)
-    w0  = 3./10. * (1 + (tau / (b0 + 1e-20))**4)
-    w1  = 3./5.  * (1 + (tau / (b1 + 1e-20))**4)
-    w2  = 1./10. * (1 + (tau / (b2 + 1e-20))**4)
+    w0  = 3./10. * (1 + (tau / (b0 + 1e-20))**2)
+    w1  = 3./5.  * (1 + (tau / (b1 + 1e-20))**2)
+    w2  = 1./10. * (1 + (tau / (b2 + 1e-20))**2)
   
     s = 1. / (w0 + w1 + w2)
     w0 = w0 * s
@@ -1466,10 +1472,10 @@ subroutine weno_seven_reconstruction(q1, q2, q3, q4, q5, q6, q7, q8, u1, u2, u3,
   endif
 
   tau = abs(b0 + 3 * b1 - 3 * b2 - b3)
-  w0  = 4./35.  * (1 + (tau / (b0 + 1e-20))**4)
-  w1  = 18./35. * (1 + (tau / (b1 + 1e-20))**4)
-  w2  = 12./35. * (1 + (tau / (b2 + 1e-20))**4)
-  w3  = 1./35.  * (1 + (tau / (b3 + 1e-20))**4)
+  w0  = 4./35.  * (1 + (tau / (b0 + 1e-20))**2)
+  w1  = 18./35. * (1 + (tau / (b1 + 1e-20))**2)
+  w2  = 12./35. * (1 + (tau / (b2 + 1e-20))**2)
+  w3  = 1./35.  * (1 + (tau / (b3 + 1e-20))**2)
 
   s = 1. / (w0 + w1 + w2 + w3)
   w0 = w0 * s
