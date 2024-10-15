@@ -253,6 +253,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   real :: u_q1, u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_q8 ! is the v velocity at q points
   real :: v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8 ! is the u velocity at q points
   real :: abs_vort_u, abs_vort_v  ! absolute vorticity at u and v points
+  real :: rel_vort_u, rel_vort_v  ! relative vorticity at u and v points
   real :: f_u, f_v      ! Coriolis coefficient at u and v points
   real :: fv, fu        ! f*v at u point and -f*u at v point
 !  real :: theta, psi    ! temperory variables for UP3 limiter
@@ -850,16 +851,16 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
     elseif (CS%Coriolis_Scheme == UP3_split) then
       do j=js,je ; do I=Isq,Ieq
         v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
-        if (v_u>0.) then
-          abs_vort_u = (-rel_vort(I,J-2) + 5*rel_vort(I,J-1) + 2*rel_vort(I,J))/6.
-        else
-          abs_vort_u = (2*rel_vort(I,J-1) + 5*rel_vort(I,J) - rel_vort(I,J+1))/6.
-        endif  
-       ! f_u = 0.5 * (G%CoriolisBu(I,J) + G%CoriolisBu(I,J-1))
-        fv = 0.25 * &
-          ((G%CoriolisBu(I,J) * (v(i+1,J,k) + v(i,J,k))) + &
-           (G%CoriolisBu(I,J-1) * (v(i,J-1,k) + v(i+1,J-1,k))))       
-        CAu(I,j,k) = (abs_vort_u) * v_u + fv
+        call UP3_limiter_reconstruction(rel_vort(I,J-2), rel_vort(I,J-1),&
+                rel_vort(I,J), rel_vort(I,J+1), v_u, rel_vort_u)
+
+!        fv = 0.25 * &
+!          ((G%CoriolisBu(I,J) * (v(i+1,J,k) + v(i,J,k))) + &
+!           (G%CoriolisBu(I,J-1) * (v(i,J-1,k) + v(i+1,J-1,k))))       
+        fv = 0.25 * G%IdxCu(I,j) * &
+          ((G%CoriolisBu(I,J) * Ih_q(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
+           (G%CoriolisBu(I,J-1) * Ih_q(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k))))  
+        CAu(I,j,k) = (rel_vort_u) * v_u + fv
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == CEN4_ENSTRO) then
       do j=js,je ; do I=Isq,Ieq
@@ -1078,16 +1079,15 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
     elseif (CS%Coriolis_Scheme == UP3_split) then
       do J=Jsq,Jeq ; do i=is,ie
         u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
-        if (u_v>0.) then
-          abs_vort_v = (-rel_vort(I-2,J) + 5*rel_vort(I-1,J) + 2*rel_vort(I,J))/6.
-        else
-          abs_vort_v = (2*rel_vort(I-1,J) + 5*rel_vort(I,J) - rel_vort(I+1,J))/6.
-        endif  
-  !      f_v = 0.5 * (G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J))
-        fu = - 0.25* &
-            ((G%CoriolisBu(I-1,J)*(u(I-1,j,k) + u(I-1,j+1,k))) + &
-             (G%CoriolisBu(I,J)*(u(I,j,k) + u(I,j+1,k))))         
-        CAv(i,J,k) = - (abs_vort_v) * u_v + fu
+        call UP3_limiter_reconstruction(rel_vort(I-2,J), rel_vort(I-1,J),&
+                rel_vort(I,J), rel_vort(I+1,J), u_v, rel_vort_v) 
+!        fu = - 0.25* &
+!            ((G%CoriolisBu(I-1,J)*(u(I-1,j,k) + u(I-1,j+1,k))) + &
+!             (G%CoriolisBu(I,J)*(u(I,j,k) + u(I,j+1,k))))         
+        fu = - 0.25 * G%IdyCv(i,J) *&
+            ((G%CoriolisBu(I-1,J)*Ih_q(I-1,J)*(uh(I-1,j,k) + uh(I-1,j+1,k))) + &
+             (G%CoriolisBu(I,J)*Ih_q(I,J)*(uh(I,j,k) + uh(I,j+1,k))))         
+        CAv(i,J,k) = - (rel_vort_v) * u_v + fu
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == CEN4_ENSTRO) then
       do J=Jsq,Jeq ; do i=is,ie
