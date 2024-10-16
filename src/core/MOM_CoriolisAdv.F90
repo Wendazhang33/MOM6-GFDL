@@ -74,6 +74,7 @@ type, public :: CoriolisAdv_CS ; private
                              !! available at present if Coriolis scheme is
                              !! SADOURNY75_ENERGY.
   logical :: weno_velocity_smooth !! If true, use velocity to compute the weighting for WENO
+  logical :: UP3_use_limiter !! If true, use flux limiter when UP3 scheme is called
   type(time_type), pointer :: Time !< A pointer to the ocean model's clock.
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the timing of diagnostic output.
   !>@{ Diagnostic IDs
@@ -256,6 +257,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   real :: rel_vort_u, rel_vort_v  ! relative vorticity at u and v points
   real :: f_u, f_v      ! Coriolis coefficient at u and v points
   real :: fv, fu        ! f*v at u point and -f*u at v point
+  real :: fq1, fq2, fq3, fq4 !f/h at u point using Arakawa and Hsu reconstruction
 !  real :: theta, psi    ! temperory variables for UP3 limiter
 
 ! To work, the following fields must be set outside of the usual
@@ -792,9 +794,19 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 !        fv = 0.25 * &
 !          ((G%CoriolisBu(I,J) * (v(i+1,J,k) + v(i,J,k))) + &
 !           (G%CoriolisBu(I,J-1) * (v(i,J-1,k) + v(i+1,J-1,k))))  
-        fv = 0.25 * G%IdxCu(I,j) * &
-          ((G%CoriolisBu(I,J) * Ih_q(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
-           (G%CoriolisBu(I,J-1) * Ih_q(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k))))  
+!        fv = 0.25 * G%IdxCu(I,j) * &
+!          ((G%CoriolisBu(I,J) * Ih_q(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
+!           (G%CoriolisBu(I,J-1) * Ih_q(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k))))  
+        fq1 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I+1,J)*Ih_q(I+1,J) + & 
+               G%CoriolisBu(I,J-1)*Ih_q(I,J-1))) * C1_12
+        fq2 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I-1,J)*Ih_q(I-1,J) + &
+               G%CoriolisBu(I,J-1)*Ih_q(I,J-1))) * C1_12
+        fq3 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I-1,J-1)*Ih_q(I-1,J-1)) + &
+                G%CoriolisBu(I,J-1)*Ih_q(I,J-1)) * C1_12
+        fq4 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I+1,J-1)*Ih_q(I+1,J-1)) + &
+                G%CoriolisBu(I,J-1)*Ih_q(I,J-1)) * C1_12
+        fv = G%IdxCu(I,j) * &
+          (fq1*vh(i+1,J,k) + fq2*vh(i,J,k) + fq3*vh(i,J-1,k) + fq4*vh(i+1,J-1,k))
 
         CAu(I,j,k) = (q_u * v_u) + fv
       enddo ; enddo            
@@ -860,9 +872,19 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 !        fv = 0.25 * &
 !          ((G%CoriolisBu(I,J) * (v(i+1,J,k) + v(i,J,k))) + &
 !           (G%CoriolisBu(I,J-1) * (v(i,J-1,k) + v(i+1,J-1,k))))       
-        fv = 0.25 * G%IdxCu(I,j) * &
-          ((G%CoriolisBu(I,J) * Ih_q(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
-           (G%CoriolisBu(I,J-1) * Ih_q(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k))))  
+!        fv = 0.25 * G%IdxCu(I,j) * &
+!          ((G%CoriolisBu(I,J) * Ih_q(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
+!           (G%CoriolisBu(I,J-1) * Ih_q(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k))))  
+        fq1 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I+1,J)*Ih_q(I+1,J) + & 
+               G%CoriolisBu(I,J-1)*Ih_q(I,J-1))) * C1_12
+        fq2 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I-1,J)*Ih_q(I-1,J) + &
+               G%CoriolisBu(I,J-1)*Ih_q(I,J-1))) * C1_12
+        fq3 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I-1,J-1)*Ih_q(I-1,J-1)) + &
+                G%CoriolisBu(I,J-1)*Ih_q(I,J-1)) * C1_12
+        fq4 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I+1,J-1)*Ih_q(I+1,J-1)) + &
+                G%CoriolisBu(I,J-1)*Ih_q(I,J-1)) * C1_12
+        fv = G%IdxCu(I,j) * &
+          (fq1*vh(i+1,J,k) + fq2*vh(i,J,k) + fq3*vh(i,J-1,k) + fq4*vh(i+1,J-1,k))
         CAu(I,j,k) = (rel_vort_u) * v_u + fv
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == CEN4_ENSTRO) then
@@ -1024,9 +1046,19 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 !        fu = - 0.25* &
 !            ((G%CoriolisBu(I-1,J)*(u(I-1,j,k) + u(I-1,j+1,k))) + &
 !             (G%CoriolisBu(I,J)*(u(I,j,k) + u(I,j+1,k)))) 
-        fu = - 0.25 * G%IdyCv(i,J) * &
-            ((G%CoriolisBu(I-1,J)*Ih_q(I-1,J)*(uh(I-1,j,k) + uh(I-1,j+1,k))) + &
-             (G%CoriolisBu(I,J)*Ih_q(I,J)*(uh(I,j,k) + uh(I,j+1,k))))         
+!        fu = - 0.25 * G%IdyCv(i,J) * &
+!            ((G%CoriolisBu(I-1,J)*Ih_q(I-1,J)*(uh(I-1,j,k) + uh(I-1,j+1,k))) + &
+!             (G%CoriolisBu(I,J)*Ih_q(I,J)*(uh(I,j,k) + uh(I,j+1,k))))         
+        fq1 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I-1,J)*Ih_q(I-1,J) + & 
+               G%CoriolisBu(I-1,J-1)*Ih_q(I-1,J-1))) * C1_12
+        fq2 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I-1,J)*Ih_q(I-1,J) + &
+               G%CoriolisBu(I,J-1)*Ih_q(I,J-1))) * C1_12
+        fq3 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I-1,J)*Ih_q(I-1,J)) + &
+                G%CoriolisBu(I,J+1)*Ih_q(I,J+1)) * C1_12
+        fq4 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I-1,J)*Ih_q(I-1,J)) + &
+                G%CoriolisBu(I-1,J+1)*Ih_q(I-1,J+1)) * C1_12
+        fu = - G%IdyCv(i,J) * &
+          (fq1*uh(I-1,j,k) + fq2*uh(I,j,k) + fq3*uh(I,j+1,k) + fq4*uh(I-1,j+1,k))
 
         CAv(i,J,k) = - (q_v * u_v) + fu
       enddo ; enddo
@@ -1090,9 +1122,19 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 !        fu = - 0.25* &
 !            ((G%CoriolisBu(I-1,J)*(u(I-1,j,k) + u(I-1,j+1,k))) + &
 !             (G%CoriolisBu(I,J)*(u(I,j,k) + u(I,j+1,k))))         
-        fu = - 0.25 * G%IdyCv(i,J) *&
-            ((G%CoriolisBu(I-1,J)*Ih_q(I-1,J)*(uh(I-1,j,k) + uh(I-1,j+1,k))) + &
-             (G%CoriolisBu(I,J)*Ih_q(I,J)*(uh(I,j,k) + uh(I,j+1,k))))         
+!        fu = - 0.25 * G%IdyCv(i,J) *&
+!            ((G%CoriolisBu(I-1,J)*Ih_q(I-1,J)*(uh(I-1,j,k) + uh(I-1,j+1,k))) + &
+!             (G%CoriolisBu(I,J)*Ih_q(I,J)*(uh(I,j,k) + uh(I,j+1,k))))         
+        fq1 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I-1,J)*Ih_q(I-1,J) + & 
+               G%CoriolisBu(I-1,J-1)*Ih_q(I-1,J-1))) * C1_12
+        fq2 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I-1,J)*Ih_q(I-1,J) + &
+               G%CoriolisBu(I,J-1)*Ih_q(I,J-1))) * C1_12
+        fq3 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I-1,J)*Ih_q(I-1,J)) + &
+                G%CoriolisBu(I,J+1)*Ih_q(I,J+1)) * C1_12
+        fq4 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I-1,J)*Ih_q(I-1,J)) + &
+                G%CoriolisBu(I-1,J+1)*Ih_q(I-1,J+1)) * C1_12
+        fu = - G%IdyCv(i,J) * &
+          (fq1*uh(I-1,j,k) + fq2*uh(I,j,k) + fq3*uh(I,j+1,k) + fq4*uh(I-1,j+1,k))
         CAv(i,J,k) = - (rel_vort_v) * u_v + fu
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == CEN4_ENSTRO) then
@@ -1896,10 +1938,11 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
             "#define CORIOLIS_SCHEME "//trim(tmpstr)//" found in input file.")
   end select
   if (CS%Coriolis_Scheme == wenovi_7th_ENSTRO .or. &
+      CS%Coriolis_Scheme == wenovi_7th_split .or. &
       CS%Coriolis_Scheme == wenovi_5th_ENSTRO) then
     call get_param(param_file, mdl, "WENO_VELOCITY_SMOOTH", CS%weno_velocity_smooth, &
             "If true, use velocity to compute weighting for WENO. ", &
-                  default=.true.)
+                  default=.false.)
   endif
   if (CS%Coriolis_Scheme == AL_BLEND) then
     call get_param(param_file, mdl, "CORIOLIS_BLEND_WT_LIN", CS%wt_lin_blend, &
@@ -1956,6 +1999,14 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
       call MOM_error(FATAL, "CoriolisAdv_init: "// &
                "#define KE_SCHEME "//trim(tmpstr)//" in input file is invalid.")
   end select
+
+  if (CS%Coriolis_Scheme == UP3_ENSTRO .or. &
+      CS%Coriolis_Scheme == UP3_PV_ENSTRO .or. CS%Coriolis_Scheme == UP3_split .or. &
+      CS%KE_Scheme == KE_UP3) then
+    call get_param(param_file, mdl, "UP3_USE_LIMITER", CS%UP3_use_limiter, &
+            "If true, use flux limiter for UP3 scheme ", &
+                  default=.false.)
+  endif
 
   ! Set PV_Adv_Scheme (selects discretization of PV advection)
   call get_param(param_file, mdl, "PV_ADV_SCHEME", tmpstr, &
