@@ -1312,7 +1312,7 @@ subroutine weno_three_reconstruction(q1, q2, q3, q4, u1, u2, u3, u4, u, qr, velo
     if (u>0.) then
       call weno_three_reconstruction_0(q2, q3, c0)
       call weno_three_reconstruction_1(q1, q2, c1) 
-      if (velocity_smoothing == .true.) then
+      if (velocity_smoothing) then
         call weno_three_weight(u2, u3, b0)
         call weno_three_weight(u1, u2, b1)
       else
@@ -1322,7 +1322,7 @@ subroutine weno_three_reconstruction(q1, q2, q3, q4, u1, u2, u3, u4, u, qr, velo
     else
       call weno_three_reconstruction_0(q3, q2, c0)
       call weno_three_reconstruction_1(q4, q3, c1)
-      if (velocity_smoothing == .true.) then
+      if (velocity_smoothing) then
         call weno_three_weight(u3, u2, b0)
         call weno_three_weight(u4, u3, b1)
       else
@@ -1382,7 +1382,7 @@ subroutine weno_five_reconstruction(q1, q2, q3, q4, q5, q6, u1, u2, u3, u4, u5, 
       call weno_five_reconstruction_0(q3, q4, q5, c0)
       call weno_five_reconstruction_1(q2, q3, q4, c1) 
       call weno_five_reconstruction_2(q1, q2, q3, c2)
-      if (velocity_smoothing == .true.) then
+      if (velocity_smoothing) then
         call weno_five_weight_0(u3, u4, u5, b0)
         call weno_five_weight_1(u2, u3, u4, b1)
         call weno_five_weight_2(u1, u2, u3, b2)
@@ -1395,7 +1395,7 @@ subroutine weno_five_reconstruction(q1, q2, q3, q4, q5, q6, u1, u2, u3, u4, u5, 
       call weno_five_reconstruction_0(q4, q3, q2, c0)
       call weno_five_reconstruction_1(q5, q4, q3, c1)
       call weno_five_reconstruction_2(q6, q5, q4, c2)
-      if (velocity_smoothing == .true.) then
+      if (velocity_smoothing) then
         call weno_five_weight_0(u4, u3, u2, b0)
         call weno_five_weight_1(u5, u4, u3, b1)
         call weno_five_weight_2(u6, u5, u4, b2)
@@ -1484,7 +1484,7 @@ subroutine weno_seven_reconstruction(q1, q2, q3, q4, q5, q6, q7, q8, u1, u2, u3,
     call weno_seven_reconstruction_1(q3, q4, q5, q6, c1) 
     call weno_seven_reconstruction_2(q2, q3, q4, q5, c2)
     call weno_seven_reconstruction_3(q1, q2, q3, q4, c3)
-    if (velocity_smoothing == .true.) then
+    if (velocity_smoothing) then
       call weno_seven_weight_0(u4, u5, u6, u7, b0)
       call weno_seven_weight_1(u3, u4, u5, u6, b1)
       call weno_seven_weight_2(u2, u3, u4, u5, b2)
@@ -1500,7 +1500,7 @@ subroutine weno_seven_reconstruction(q1, q2, q3, q4, q5, q6, q7, q8, u1, u2, u3,
     call weno_seven_reconstruction_1(q6, q5, q4, q3, c1)
     call weno_seven_reconstruction_2(q7, q6, q5, q4, c2)
     call weno_seven_reconstruction_3(q8, q7, q6, q5, c3)
-    if (velocity_smoothing == .true.) then
+    if (velocity_smoothing) then
       call weno_seven_weight_0(u5, u4, u3, u2, b0)
       call weno_seven_weight_1(u6, u5, u4, u3, b1)
       call weno_seven_weight_2(u7, u6, u5, u4, b2)
