@@ -766,11 +766,11 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
             ! all values are valid, we use seventh order reconstruction
             call weno_seven_reconstruction(rel_vort(I,J-4),rel_vort(I,J-3),rel_vort(I,J-2),rel_vort(I,J-1), &
                                            rel_vort(I,J)  ,rel_vort(I,J+1),rel_vort(I,J+2),rel_vort(I,J+3), &
-                                           u_q1, u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_q8, v_u, q_u, CS%weno_velocity_smooth)
+                           u_q1, u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_q8, v_u, q_u, CS%weno_velocity_smooth)
 
             ! call weno_seven_reconstruction(abs_vort(I,J-4),abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), &
             !                                abs_vort(I,J)  ,abs_vort(I,J+1),abs_vort(I,J+2),abs_vort(I,J+3), &
-            !                             v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8, v_u, q_uv, CS%weno_velocity_smooth)
+            !               v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8, v_u, q_uv, CS%weno_velocity_smooth)
 
             ! q_u = 0.5 * (q_uu + q_uv)
         elseif (fifth_order == 1) then
