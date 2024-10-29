@@ -891,26 +891,29 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == UP3_split) then
       do j=js,je ; do I=Isq,Ieq
-        v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
-        call UP3_limiter_reconstruction(rel_vort(I,J-2), rel_vort(I,J-1),&
-                rel_vort(I,J), rel_vort(I,J+1), v_u, rel_vort_u)
+      !  v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
+      !  call UP3_limiter_reconstruction(rel_vort(I,J-2), rel_vort(I,J-1),&
+      !          rel_vort(I,J), rel_vort(I,J+1), v_u, rel_vort_u)
+        v_u = 0.25*G%IdxCu(I,j)*((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
+        call UP3_limiter_reconstruction(rel_vort(I,J-2)*Ih_q(I,J-2), rel_vort(I,J-1)*Ih_q(I,J-1),&
+                rel_vort(I,J)*Ih_q(I,J), rel_vort(I,J+1)*Ih_q(I,J+1), v_u, rel_vort_u)
 
 !        fv = 0.25 * &
 !          ((G%CoriolisBu(I,J) * (v(i+1,J,k) + v(i,J,k))) + &
 !           (G%CoriolisBu(I,J-1) * (v(i,J-1,k) + v(i+1,J-1,k))))
-        fv = 0.25 * G%IdxCu(I,j) * &
-          ((G%CoriolisBu(I,J) * Ih_q(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
-           (G%CoriolisBu(I,J-1) * Ih_q(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k))))
-!        fq1 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I+1,J)*Ih_q(I+1,J) + &
-!               G%CoriolisBu(I,J-1)*Ih_q(I,J-1))) * C1_12
-!        fq2 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I-1,J)*Ih_q(I-1,J) + &
-!               G%CoriolisBu(I,J-1)*Ih_q(I,J-1))) * C1_12
-!        fq3 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I-1,J-1)*Ih_q(I-1,J-1)) + &
-!                G%CoriolisBu(I,J-1)*Ih_q(I,J-1)) * C1_12
-!        fq4 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I+1,J-1)*Ih_q(I+1,J-1)) + &
-!                G%CoriolisBu(I,J-1)*Ih_q(I,J-1)) * C1_12
-!        fv = G%IdxCu(I,j) * &
-!          (fq1*vh(i+1,J,k) + fq2*vh(i,J,k) + fq3*vh(i,J-1,k) + fq4*vh(i+1,J-1,k))
+!        fv = 0.25 * G%IdxCu(I,j) * &
+!          ((G%CoriolisBu(I,J) * Ih_q(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
+!           (G%CoriolisBu(I,J-1) * Ih_q(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k))))
+        fq1 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I+1,J)*Ih_q(I+1,J) + &
+               G%CoriolisBu(I,J-1)*Ih_q(I,J-1))) * C1_12
+        fq2 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I-1,J)*Ih_q(I-1,J) + &
+               G%CoriolisBu(I,J-1)*Ih_q(I,J-1))) * C1_12
+        fq3 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I-1,J-1)*Ih_q(I-1,J-1)) + &
+                G%CoriolisBu(I,J-1)*Ih_q(I,J-1)) * C1_12
+        fq4 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I+1,J-1)*Ih_q(I+1,J-1)) + &
+                G%CoriolisBu(I,J-1)*Ih_q(I,J-1)) * C1_12
+        fv = G%IdxCu(I,j) * &
+          (fq1*vh(i+1,J,k) + fq2*vh(i,J,k) + fq3*vh(i,J-1,k) + fq4*vh(i+1,J-1,k))
         CAu(I,j,k) = (rel_vort_u) * v_u + fv
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == CEN4_ENSTRO) then
@@ -1142,25 +1145,28 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == UP3_split) then
       do J=Jsq,Jeq ; do i=is,ie
-        u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
-        call UP3_limiter_reconstruction(rel_vort(I-2,J), rel_vort(I-1,J),&
-                rel_vort(I,J), rel_vort(I+1,J), u_v, rel_vort_v)
+!        u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
+!        call UP3_limiter_reconstruction(rel_vort(I-2,J), rel_vort(I-1,J),&
+!                rel_vort(I,J), rel_vort(I+1,J), u_v, rel_vort_v)
+        u_v = 0.25*G%IdyCv(i,J)*((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
+        call UP3_limiter_reconstruction(rel_vort(I-2,J)*Ih_q(I-2,J), rel_vort(I-1,J)*Ih_q(I-1,J),&
+                rel_vort(I,J)*Ih_q(I,J), rel_vort(I+1,J)*Ih_q(I+1,J), u_v, rel_vort_v)
 !        fu = - 0.25* &
 !            ((G%CoriolisBu(I-1,J)*(u(I-1,j,k) + u(I-1,j+1,k))) + &
 !             (G%CoriolisBu(I,J)*(u(I,j,k) + u(I,j+1,k))))
-        fu = - 0.25 * G%IdyCv(i,J) *&
-            ((G%CoriolisBu(I-1,J)*Ih_q(I-1,J)*(uh(I-1,j,k) + uh(I-1,j+1,k))) + &
-             (G%CoriolisBu(I,J)*Ih_q(I,J)*(uh(I,j,k) + uh(I,j+1,k))))
-!        fq1 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I-1,J)*Ih_q(I-1,J) + &
-!               G%CoriolisBu(I-1,J-1)*Ih_q(I-1,J-1))) * C1_12
-!        fq2 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I-1,J)*Ih_q(I-1,J) + &
-!               G%CoriolisBu(I,J-1)*Ih_q(I,J-1))) * C1_12
-!        fq3 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I-1,J)*Ih_q(I-1,J)) + &
-!                G%CoriolisBu(I,J+1)*Ih_q(I,J+1)) * C1_12
-!        fq4 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I-1,J)*Ih_q(I-1,J)) + &
-!                G%CoriolisBu(I-1,J+1)*Ih_q(I-1,J+1)) * C1_12
-!        fu = - G%IdyCv(i,J) * &
-!          (fq1*uh(I-1,j,k) + fq2*uh(I,j,k) + fq3*uh(I,j+1,k) + fq4*uh(I-1,j+1,k))
+!        fu = - 0.25 * G%IdyCv(i,J) *&
+!            ((G%CoriolisBu(I-1,J)*Ih_q(I-1,J)*(uh(I-1,j,k) + uh(I-1,j+1,k))) + &
+!             (G%CoriolisBu(I,J)*Ih_q(I,J)*(uh(I,j,k) + uh(I,j+1,k))))
+        fq1 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I-1,J)*Ih_q(I-1,J) + &
+               G%CoriolisBu(I-1,J-1)*Ih_q(I-1,J-1))) * C1_12
+        fq2 = (G%CoriolisBu(I,J)*Ih_q(I,J) + (G%CoriolisBu(I-1,J)*Ih_q(I-1,J) + &
+               G%CoriolisBu(I,J-1)*Ih_q(I,J-1))) * C1_12
+        fq3 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I-1,J)*Ih_q(I-1,J)) + &
+                G%CoriolisBu(I,J+1)*Ih_q(I,J+1)) * C1_12
+        fq4 = ((G%CoriolisBu(I,J)*Ih_q(I,J) + G%CoriolisBu(I-1,J)*Ih_q(I-1,J)) + &
+                G%CoriolisBu(I-1,J+1)*Ih_q(I-1,J+1)) * C1_12
+        fu = - G%IdyCv(i,J) * &
+          (fq1*uh(I-1,j,k) + fq2*uh(I,j,k) + fq3*uh(I,j+1,k) + fq4*uh(I-1,j+1,k))
         CAv(i,J,k) = - (rel_vort_v) * u_v + fu
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == CEN4_ENSTRO) then
