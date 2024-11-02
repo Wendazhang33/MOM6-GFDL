@@ -43,6 +43,7 @@ type, public :: CoriolisAdv_CS ; private
   integer :: KE_Scheme       !< KE_SCHEME selects the discretization for
                              !! the kinetic energy. Valid values are:
                              !!  KE_ARAKAWA, KE_SIMPLE_GUDONOV, KE_GUDONOV
+  integer :: UP3_limiter     !! UP3 scheme selects the flux limiter. Valid values are: NONE, KOREN, SUPERBEE
   integer :: PV_Adv_Scheme   !< PV_ADV_SCHEME selects the discretization for PV advection
                              !! Valid values are:
                              !! - PV_ADV_CENTERED - centered (aka Sadourny, 75)
@@ -75,7 +76,6 @@ type, public :: CoriolisAdv_CS ; private
                              !! available at present if Coriolis scheme is
                              !! SADOURNY75_ENERGY.
   logical :: weno_velocity_smooth !! If true, use velocity to compute the weighting for WENO
-  logical :: UP3_use_limiter !! If true, use flux limiter when UP3 scheme is called
   type(time_type), pointer :: Time !< A pointer to the ocean model's clock.
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the timing of diagnostic output.
   !>@{ Diagnostic IDs
@@ -134,6 +134,14 @@ character*(20), parameter :: KE_SIMPLE_GUDONOV_STRING = "KE_SIMPLE_GUDONOV"
 character*(20), parameter :: KE_GUDONOV_STRING = "KE_GUDONOV"
 character*(20), parameter :: KE_UP3_STRING = "KE_UP3"
 character*(20), parameter :: KE_WENOVI_7TH_STRING = "KE_WENOVI_7TH"
+!>@}
+!>@{ Enumeration values for UP3_limiter
+integer, parameter :: UP3_NONE          = 23
+integer, parameter :: UP3_KOREN         = 24
+integer, parameter :: UP3_SUPERBEE      = 25
+character*(20), parameter :: UP3_NONE_STRING = "UP3_NONE"
+character*(20), parameter :: UP3_KOREN_STRING = "UP3_KOREN"
+character*(20), parameter :: UP3_SUPERBEE_STRING = "UP3_SUPERBEE"
 !>@}
 !>@{ Enumeration values for PV_Adv_Scheme
 integer, parameter :: PV_ADV_CENTERED   = 21
@@ -878,24 +886,41 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
     elseif (CS%Coriolis_Scheme == UP3_ENSTRO) then
       do j=js,je ; do I=Isq,Ieq
         v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
-        call UP3_limiter_reconstruction(abs_vort(I,J-2), abs_vort(I,J-1),&
+        call UP3_Koren_limiter_reconstruction(abs_vort(I,J-2), abs_vort(I,J-1),&
                 abs_vort(I,J), abs_vort(I,J+1), v_u, abs_vort_u)
         CAu(I,j,k) = (abs_vort_u) * v_u
       enddo ; enddo
+
     elseif (CS%Coriolis_Scheme == UP3_PV_ENSTRO) then
-      do j=js,je ; do I=Isq,Ieq
-        v_u = 0.25*G%IdxCu(I,j)*((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
-        call UP3_limiter_reconstruction(q(I,J-2), q(I,J-1),&
-                q(I,J), q(I,J+1), v_u, q_u)
-        CAu(I,j,k) = (q_u) * v_u
-      enddo ; enddo
+      if (CS%UP3_limiter == UP3_NONE) then
+        do j=js,je ; do I=Isq,Ieq
+          v_u = 0.25*G%IdxCu(I,j)*((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
+          call UP3_reconstruction(q(I,J-2), q(I,J-1),&
+                  q(I,J), q(I,J+1), v_u, q_u)
+          CAu(I,j,k) = (q_u) * v_u
+        enddo ; enddo
+      elseif (CS%UP3_limiter == UP3_KOREN) then
+        do j=js,je ; do I=Isq,Ieq
+          v_u = 0.25*G%IdxCu(I,j)*((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
+          call UP3_Koren_limiter_reconstruction(q(I,J-2), q(I,J-1),&
+                  q(I,J), q(I,J+1), v_u, q_u)
+          CAu(I,j,k) = (q_u) * v_u
+        enddo ; enddo
+      elseif (CS%UP3_limiter == UP3_SUPERBEE) then
+        do j=js,je ; do I=Isq,Ieq
+          v_u = 0.25*G%IdxCu(I,j)*((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
+          call UP3_Superbee_limiter_reconstruction(q(I,J-2), q(I,J-1),&
+                  q(I,J), q(I,J+1), v_u, q_u)
+          CAu(I,j,k) = (q_u) * v_u
+        enddo ; enddo
+      endif
     elseif (CS%Coriolis_Scheme == UP3_split) then
       do j=js,je ; do I=Isq,Ieq
       !  v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
       !  call UP3_limiter_reconstruction(rel_vort(I,J-2), rel_vort(I,J-1),&
       !          rel_vort(I,J), rel_vort(I,J+1), v_u, rel_vort_u)
         v_u = 0.25*G%IdxCu(I,j)*((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
-        call UP3_limiter_reconstruction(rel_vort(I,J-2)*Ih_q(I,J-2), rel_vort(I,J-1)*Ih_q(I,J-1),&
+        call UP3_Koren_limiter_reconstruction(rel_vort(I,J-2)*Ih_q(I,J-2), rel_vort(I,J-1)*Ih_q(I,J-1),&
                 rel_vort(I,J)*Ih_q(I,J), rel_vort(I,J+1)*Ih_q(I,J+1), v_u, rel_vort_u)
 
 !        fv = 0.25 * &
@@ -1132,24 +1157,40 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
     elseif (CS%Coriolis_Scheme == UP3_ENSTRO) then
       do J=Jsq,Jeq ; do i=is,ie
         u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
-        call UP3_limiter_reconstruction(abs_vort(I-2,J), abs_vort(I-1,J),&
+        call UP3_Koren_limiter_reconstruction(abs_vort(I-2,J), abs_vort(I-1,J),&
                 abs_vort(I,J), abs_vort(I+1,J), u_v, abs_vort_v)
         CAv(i,J,k) = - (abs_vort_v) * u_v
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == UP3_PV_ENSTRO) then
-      do J=Jsq,Jeq ; do i=is,ie
-        u_v = 0.25*G%IdyCv(i,J)*((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
-        call UP3_limiter_reconstruction(q(I-2,J), q(I-1,J),&
-                q(I,J), q(I+1,J), u_v, q_v)
-        CAv(i,J,k) = - (q_v) * u_v
-      enddo ; enddo
+      if (CS%UP3_limiter == UP3_NONE) then
+        do J=Jsq,Jeq ; do i=is,ie
+          u_v = 0.25*G%IdyCv(i,J)*((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
+          call UP3_reconstruction(q(I-2,J), q(I-1,J),&
+                  q(I,J), q(I+1,J), u_v, q_v)
+          CAv(i,J,k) = - (q_v) * u_v
+        enddo ; enddo
+      elseif (CS%UP3_limiter == UP3_KOREN) then
+        do J=Jsq,Jeq ; do i=is,ie
+          u_v = 0.25*G%IdyCv(i,J)*((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
+          call UP3_Koren_limiter_reconstruction(q(I-2,J), q(I-1,J),&
+                  q(I,J), q(I+1,J), u_v, q_v)
+          CAv(i,J,k) = - (q_v) * u_v
+        enddo ; enddo
+      elseif (CS%UP3_limiter == UP3_SUPERBEE) then
+        do J=Jsq,Jeq ; do i=is,ie
+          u_v = 0.25*G%IdyCv(i,J)*((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
+          call UP3_Superbee_limiter_reconstruction(q(I-2,J), q(I-1,J),&
+                  q(I,J), q(I+1,J), u_v, q_v)
+          CAv(i,J,k) = - (q_v) * u_v
+        enddo ; enddo
+      endif
     elseif (CS%Coriolis_Scheme == UP3_split) then
       do J=Jsq,Jeq ; do i=is,ie
 !        u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
 !        call UP3_limiter_reconstruction(rel_vort(I-2,J), rel_vort(I-1,J),&
 !                rel_vort(I,J), rel_vort(I+1,J), u_v, rel_vort_v)
         u_v = 0.25*G%IdyCv(i,J)*((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
-        call UP3_limiter_reconstruction(rel_vort(I-2,J)*Ih_q(I-2,J), rel_vort(I-1,J)*Ih_q(I-1,J),&
+        call UP3_Koren_limiter_reconstruction(rel_vort(I-2,J)*Ih_q(I-2,J), rel_vort(I-1,J)*Ih_q(I-1,J),&
                 rel_vort(I,J)*Ih_q(I,J), rel_vort(I+1,J)*Ih_q(I+1,J), u_v, rel_vort_v)
 !        fu = - 0.25* &
 !            ((G%CoriolisBu(I-1,J)*(u(I-1,j,k) + u(I-1,j+1,k))) + &
@@ -1304,7 +1345,20 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 
 end subroutine CorAdCalc
 
-subroutine UP3_limiter_reconstruction(q1,q2,q3,q4,u,qr)
+subroutine UP3_reconstruction(q1,q2,q3,q4,u,qr)
+  real, intent(in)    :: q1, q2, q3, q4
+  real, intent(in)    :: u
+  real, intent(inout) :: qr
+
+  if (u>0.) then
+    qr = (-q1 + 5.*q2 + 2.*q3)/6.
+  else
+    qr = (2*q2 + 5*q3 - q4)/6.
+  endif
+
+end subroutine UP3_reconstruction
+
+subroutine UP3_Koren_limiter_reconstruction(q1,q2,q3,q4,u,qr)
   real, intent(in)    :: q1, q2, q3, q4
   real, intent(in)    :: u
   real, intent(inout) :: qr
@@ -1320,7 +1374,25 @@ subroutine UP3_limiter_reconstruction(q1,q2,q3,q4,u,qr)
     qr = q3 + psi*(q2 - q3)
   endif
 
-end subroutine UP3_limiter_reconstruction
+end subroutine UP3_Koren_limiter_reconstruction
+
+subroutine UP3_Superbee_limiter_reconstruction(q1,q2,q3,q4,u,qr)
+  real, intent(in)    :: q1, q2, q3, q4
+  real, intent(in)    :: u
+  real, intent(inout) :: qr
+  real                :: theta, psi
+
+  if (u>0.) then
+    theta = (q2 - q1)/(q3 - q2 + 1e-20)
+    psi = max(0., min(1., 2.*theta), min(2., theta)) ! Superbee limiter
+    qr = q2 + 0.5*psi*(q3 - q2)
+  else
+    theta = (q4 - q3)/(q3 - q2 + 1e-20)
+    psi = max(0., min(1., 2.*theta), min(2., theta))
+    qr = q3 + 0.5*psi*(q2 - q3)
+  endif
+
+end subroutine UP3_Superbee_limiter_reconstruction
 
 subroutine CEN4_reconstruction(q1,q2,q3,q4,qr)
   real, intent(in)    :: q1, q2, q3, q4
@@ -1700,8 +1772,16 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
 
       if (third_order_u == 1) then
         up = (-u(I-2,j,k) + 7*u(I-1,j,k) + 7*u(I,j,k) - u(I+1,j,k))/12.
-        call UP3_limiter_reconstruction(u(I-2,j,k), u(I-1,j,k),&
-                u(I,j,k), u(I+1,j,k), up, um)
+        if (CS%UP3_limiter == UP3_NONE) then
+          call UP3_reconstruction(u(I-2,j,k), u(I-1,j,k),&
+                  u(I,j,k), u(I+1,j,k), up, um)
+        elseif (CS%UP3_limiter == UP3_KOREN) then
+          call UP3_Koren_limiter_reconstruction(u(I-2,j,k), u(I-1,j,k),&
+                  u(I,j,k), u(I+1,j,k), up, um)
+        elseif (CS%UP3_limiter == UP3_SUPERBEE) then
+          call UP3_Superbee_limiter_reconstruction(u(I-2,j,k), u(I-1,j,k),&
+                  u(I,j,k), u(I+1,j,k), up, um)
+        endif
 !        if (up>0.) then
 !          um = (-u(I-2,j,k) + 5*u(I-1,j,k) + 2*u(I,j,k))/6.
 !        elseif (up<0.) then
@@ -1724,8 +1804,16 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
                      G%mask2dCv(i,J) * G%mask2dCv(i,J+1))
       if (third_order_v ==1) then
         vp = (-v(i,J-2,k) + 7*v(i,J-1,k) + 7*v(i,J,k) - v(i,J+1,k))/12.
-        call UP3_limiter_reconstruction(v(i,J-2,k), v(i,J-1,k),&
-                v(i,J,k), v(i,J+1,k), vp, vm)
+        if (CS%UP3_limiter == UP3_NONE) then
+          call UP3_reconstruction(v(i,J-2,k), v(i,J-1,k),&
+                  v(i,J,k), v(i,J+1,k), vp, vm)
+        elseif (CS%UP3_limiter == UP3_KOREN) then
+          call UP3_Koren_limiter_reconstruction(v(i,J-2,k), v(i,J-1,k),&
+                  v(i,J,k), v(i,J+1,k), vp, vm)
+        elseif (CS%UP3_limiter == UP3_SUPERBEE) then
+          call UP3_Superbee_limiter_reconstruction(v(i,J-2,k), v(i,J-1,k),&
+                  v(i,J,k), v(i,J+1,k), vp, vm)
+        endif
 !        if (vp>0.) then
 !          vm = (-v(i,J-2,k) + 5*v(i,J-1,k) + 2*v(i,J,k))/6.
 !        elseif (vp<0.) then
@@ -2036,9 +2124,20 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
   if (CS%Coriolis_Scheme == UP3_ENSTRO .or. &
       CS%Coriolis_Scheme == UP3_PV_ENSTRO .or. CS%Coriolis_Scheme == UP3_split .or. &
       CS%KE_Scheme == KE_UP3) then
-    call get_param(param_file, mdl, "UP3_USE_LIMITER", CS%UP3_use_limiter, &
-            "If true, use flux limiter for UP3 scheme ", &
-                  default=.false.)
+    call get_param(param_file, mdl, "UP3_LIMITER", tmpstr, &
+            "The flux limiter for UP3 scheme. Valid scheme are: \n"//&
+            "\t UP3_NONE, UP3_KOREN, UP3_SUPERBEE", &
+                  default=UP3_NONE_STRING)
+    tmpstr = uppercase(tmpstr)
+    select case (tmpstr)
+      case (UP3_NONE_STRING); CS%UP3_limiter = UP3_NONE
+      case (UP3_KOREN_STRING); CS%UP3_limiter = UP3_KOREN
+      case (UP3_SUPERBEE_STRING); CS%UP3_limiter = UP3_SUPERBEE
+      case default
+        call MOM_mesg('CoriolisAdv_init: UP3_limiter ="'//trim(tmpstr)//'"', 0)
+        call MOM_error(FATAL, "CoriolisAdv_init: "// &
+                 "#define UP3_limiter "//trim(tmpstr)//" in input file is invalid.")
+    end select
   endif
 
   ! Set PV_Adv_Scheme (selects discretization of PV advection)
