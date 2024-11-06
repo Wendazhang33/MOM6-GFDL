@@ -129,11 +129,13 @@ integer, parameter :: KE_SIMPLE_GUDONOV = 11
 integer, parameter :: KE_GUDONOV        = 12
 integer, parameter :: KE_UP3            = 13
 integer, parameter :: KE_wenovi_7th     = 14
+integer, parameter :: KE_UP3_NO_LIMITER     = 30
 character*(20), parameter :: KE_ARAKAWA_STRING = "KE_ARAKAWA"
 character*(20), parameter :: KE_SIMPLE_GUDONOV_STRING = "KE_SIMPLE_GUDONOV"
 character*(20), parameter :: KE_GUDONOV_STRING = "KE_GUDONOV"
 character*(20), parameter :: KE_UP3_STRING = "KE_UP3"
 character*(20), parameter :: KE_WENOVI_7TH_STRING = "KE_WENOVI_7TH"
+character*(20), parameter :: KE_UP3_NO_LIMITER_STRING = "KE_UP3_NO_LIMITER"
 !>@}
 !>@{ Enumeration values for UP3_limiter
 integer, parameter :: UP3_NONE          = 23
@@ -542,8 +544,8 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 
     do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
       hArea_q = (hArea_u(I,j) + hArea_u(I,j+1)) + (hArea_v(i,J) + hArea_v(i+1,J))
-      vol_neglect = ((G%areaT(i,j) + G%areaT(i+1,j+1)) + &
-                    (G%areaT(i+1,j) + G%areaT(i,j+1))) * GV%H_subroundoff
+!      vol_neglect = ((G%areaT(i,j) + G%areaT(i+1,j+1)) + &
+!                    (G%areaT(i+1,j) + G%areaT(i,j+1))) * GV%H_subroundoff
       Ih_q(I,J) = Area_q(I,J) / (hArea_q + vol_neglect)
       q(I,J) = abs_vort(I,J) * Ih_q(I,J)
     enddo; enddo
@@ -1762,6 +1764,48 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
       vm = 0.5*( v(i, J ,k) - ABS( v(i, J ,k) ) ) ; vm2a = vm*vm*G%areaCv(i, J )
       KE(i,j) = ( max(um2a,up2a) + max(vm2a,vp2a) )*0.5*G%IareaT(i,j)
     enddo ; enddo
+  elseif (CS%KE_Scheme == KE_UP3_NO_LIMITER) then
+    ! The following discretization of KE is based on the one-dimensional third-order
+    ! upwind scheme which does not take horizontal grid factors into account
+    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+    ! compute the masking to make sure that inland values are not used
+      third_order_u = (G%mask2dCu(I-2,j) * G%mask2dCu(I-1,j)* &
+                     G%mask2dCu(I,j) * G%mask2dCu(I+1,j))
+
+      if (third_order_u == 1) then
+        up = (-u(I-2,j,k) + 7*u(I-1,j,k) + 7*u(I,j,k) - u(I+1,j,k))/12.
+        call UP3_reconstruction(u(I-2,j,k), u(I-1,j,k),&
+                  u(I,j,k), u(I+1,j,k), up, um)
+      else
+        up = (u(I-1,j,k) + u(I,j,k))*0.5
+        if (up>0.) then
+          um = u(I-1,j,k)
+        elseif (up<0.) then
+          um = u(I,j,k)
+        else
+          um = up
+        endif
+      endif
+
+      third_order_v = (G%mask2dCv(i,J-2) * G%mask2dCv(i,J-1)* &
+                     G%mask2dCv(i,J) * G%mask2dCv(i,J+1))
+      if (third_order_v ==1) then
+        vp = (-v(i,J-2,k) + 7*v(i,J-1,k) + 7*v(i,J,k) - v(i,J+1,k))/12.
+        call UP3_reconstruction(v(i,J-2,k), v(i,J-1,k),&
+                  v(i,J,k), v(i,J+1,k), vp, vm)
+      else
+        vp = (v(i,J-1,k) + v(i,J,k))*0.5
+        if (vp>0.) then
+          vm = v(i,J-1,k)
+        elseif (vp<0.) then
+          vm = v(i,J,k)
+        else
+          vm = vp
+        endif
+      endif
+
+      KE(i,j) = ( um*um + vm*vm )*0.5
+    enddo ; enddo
   elseif (CS%KE_Scheme == KE_UP3) then
     ! The following discretization of KE is based on the one-dimensional third-order
     ! upwind scheme which does not take horizontal grid factors into account
@@ -2106,7 +2150,7 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
                  "KE_SCHEME selects the discretization for acceleration "//&
                  "due to the kinetic energy gradient. Valid values are: \n"//&
                  "\t KE_ARAKAWA, KE_SIMPLE_GUDONOV, KE_GUDONOV, KE_UP3, &
-                 KE_WENOVI_7TH", &
+                 KE_WENOVI_7TH, KE_UP3_NO_LIMITER", &
                  default=KE_ARAKAWA_STRING)
   tmpstr = uppercase(tmpstr)
   select case (tmpstr)
@@ -2115,6 +2159,7 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
     case (KE_GUDONOV_STRING); CS%KE_Scheme = KE_GUDONOV
     case (KE_UP3_STRING); CS%KE_Scheme = KE_UP3
     case (KE_WENOVI_7TH_STRING); CS%KE_Scheme = KE_wenovi_7th
+    case (KE_UP3_NO_LIMITER_STRING); CS%KE_Scheme = KE_UP3_NO_LIMITER
     case default
       call MOM_mesg('CoriolisAdv_init: KE_Scheme ="'//trim(tmpstr)//'"', 0)
       call MOM_error(FATAL, "CoriolisAdv_init: "// &
