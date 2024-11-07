@@ -180,6 +180,9 @@ type, public :: barotropic_CS ; private
                              !! barotropic solver or when estimating the stable barotropic timestep
                              !! without access to the full baroclinic model state [R ~> kg m-3]
   logical :: split           !< If true, use the split time stepping scheme.
+  logical :: Coriolis_dry_as_land !< If CORIOLIS_DRY_AS_LAND is defined, the inverse q-grid
+                             !! thickness is calculated via hArea/hhArea rather than via Area/hArea.
+                             !! This treats dry ocean like land by favoring thicker adjacent T-cells.
   logical :: bound_BT_corr   !< If true, the magnitude of the fake mass source
                              !! in the barotropic equation that drives the two
                              !! estimates of the free surface height toward each
@@ -575,6 +578,7 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
     DCor_u, &     ! An averaged total thickness at u points [H ~> m or kg m-2].
     Datu          ! Basin depth at u-velocity grid points times the y-grid
                   ! spacing [H L ~> m2 or kg m-1].
+
   real, dimension(SZIW_(CS),SZJBW_(CS)) :: &
     vbt, &        ! The meridional barotropic velocity [L T-1 ~> m s-1].
     bt_rem_v, &   ! The fraction of the barotropic meridional velocity that
@@ -656,6 +660,11 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
     vhbt_prev, vhbt_sum_prev, & ! Previous transports stored for OBCs [L2 H T-1 ~> m3 s-1]
     vbt_int_prev, & ! Previous value of time-integrated velocity stored for OBCs [L ~> m]
     vhbt_int_prev   ! Previous value of time-integrated transport stored for OBCs [L2 H ~> m3]
+  real :: Area_q      ! The sum of the ocean areas at the 4 adjacent thickness points [L2 ~> m2].
+  real :: hArea_q     ! The sum of area times thickness of the cells
+                      ! surrounding a q point [H L2 ~> m3 or kg].
+  real :: hhArea_q    ! The sum of area times thickness squared of the cells
+                      ! surrounding a q point, [H2 L2 ~> m4 or m kg].
   real :: visc_rem    ! A work variable that may equal visc_rem_[uv] [nondim]
   real :: vel_prev    ! The previous velocity [L T-1 ~> m s-1].
   real :: dtbt        ! The barotropic time step [T ~> s].
@@ -929,16 +938,35 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
         DCor_v(i,J) = 0.5 * (max(GV%Z_to_H*G%bathyT(i,j+1) + eta_in(i+1,j), 0.0) + &
                              max(GV%Z_to_H*G%bathyT(i,j) + eta_in(i,j), 0.0) )
       enddo ; enddo
-      !$OMP parallel do default(shared)
-      do J=js-1,je ; do I=is-1,ie
-        q(I,J) = 0.25 * (CS%BT_Coriolis_scale * G%CoriolisBu(I,J)) * &
-             ((G%areaT(i,j) + G%areaT(i+1,j+1)) + (G%areaT(i+1,j) + G%areaT(i,j+1))) / &
-             (max(((G%areaT(i,j) * max(GV%Z_to_H*G%bathyT(i,j) + eta_in(i,j), 0.0)) + &
-                   (G%areaT(i+1,j+1) * max(GV%Z_to_H*G%bathyT(i+1,j+1) + eta_in(i+1,j+1), 0.0))) + &
-                  ((G%areaT(i+1,j) * max(GV%Z_to_H*G%bathyT(i+1,j) + eta_in(i+1,j), 0.0)) + &
-                   (G%areaT(i,j+1) * max(GV%Z_to_H*G%bathyT(i,j+1) + eta_in(i,j+1), 0.0))), h_neglect) )
-      enddo ; enddo
-    else
+      if (CS%Coriolis_dry_as_land) then
+        !$OMP parallel do default(shared) private(hArea_q,hhArea_q)
+        do J=js-1,je ; do I=is-1,ie
+          hArea_q = ((G%areaT(i,  j  ) * max(GV%Z_to_H*G%bathyT(i,  j  ) + eta_in(i,  j  ), 0.0)) + &
+                     (G%areaT(i+1,j+1) * max(GV%Z_to_H*G%bathyT(i+1,j+1) + eta_in(i+1,j+1), 0.0))) + &
+                    ((G%areaT(i+1,j  ) * max(GV%Z_to_H*G%bathyT(i+1,j  ) + eta_in(i+1,j  ), 0.0)) + &
+                     (G%areaT(i,  j+1) * max(GV%Z_to_H*G%bathyT(i  ,j+1) + eta_in(i  ,j+1), 0.0)))
+          !using **2 to simplify logic
+          hhArea_q = ((G%areaT(i,  j  ) * max(GV%Z_to_H*G%bathyT(i,  j  ) + eta_in(i,  j  ), 0.0))**2 + &
+                      (G%areaT(i+1,j+1) * max(GV%Z_to_H*G%bathyT(i+1,j+1) + eta_in(i+1,j+1), 0.0))**2) + &
+                     ((G%areaT(i+1,j  ) * max(GV%Z_to_H*G%bathyT(i+1,j  ) + eta_in(i+1,j  ), 0.0))**2 + &
+                      (G%areaT(i,  j+1) * max(GV%Z_to_H*G%bathyT(i  ,j+1) + eta_in(i  ,j+1), 0.0))**2)
+          q(I,J) = 0.25 * (CS%BT_Coriolis_scale * G%CoriolisBu(I,J)) * &
+               hArea_q / max( hhArea_q, h_neglect*h_neglect )
+        enddo ; enddo
+      else !not as_land
+        !$OMP parallel do default(shared)
+        do J=js-1,je ; do I=is-1,ie
+          ! q(I,J) = 0.25 * (CS%BT_Coriolis_scale * G%CoriolisBu(I,J)) * &
+          !      Area_q / max( hArea_q, h_neglect )
+          q(I,J) = 0.25 * (CS%BT_Coriolis_scale * G%CoriolisBu(I,J)) * &
+               ((G%areaT(i,j) + G%areaT(i+1,j+1)) + (G%areaT(i+1,j) + G%areaT(i,j+1))) / &
+               (max(((G%areaT(i,j) * max(GV%Z_to_H*G%bathyT(i,j) + eta_in(i,j), 0.0)) + &
+	  		   (G%areaT(i+1,j+1) * max(GV%Z_to_H*G%bathyT(i+1,j+1) + eta_in(i+1,j+1), 0.0))) + &
+                    ((G%areaT(i+1,j) * max(GV%Z_to_H*G%bathyT(i+1,j) + eta_in(i+1,j), 0.0)) + &
+                     (G%areaT(i,j+1) * max(GV%Z_to_H*G%bathyT(i,j+1) + eta_in(i,j+1), 0.0))), h_neglect) )
+        enddo ; enddo
+      endif !Coriolis_dry_as_land:else
+    else !Non-Boussinesq
       !$OMP parallel do default(shared)
       do j=js,je ; do I=is-1,ie
         DCor_u(I,j) = 0.5 * (eta_in(i+1,j) + eta_in(i,j))
@@ -947,13 +975,31 @@ subroutine btstep(U_in, V_in, eta_in, dt, bc_accel_u, bc_accel_v, forces, pbce, 
       do J=js-1,je ; do i=is,ie
         DCor_v(i,J) = 0.5 * (eta_in(i,j+1) + eta_in(i,j))
       enddo ; enddo
-      !$OMP parallel do default(shared)
-      do J=js-1,je ; do I=is-1,ie
-        q(I,J) = 0.25 * (CS%BT_Coriolis_scale * G%CoriolisBu(I,J)) * &
-             ((G%areaT(i,j) + G%areaT(i+1,j+1)) + (G%areaT(i+1,j) + G%areaT(i,j+1))) / &
-             (max(((G%areaT(i,j) * eta_in(i,j)) + (G%areaT(i+1,j+1) * eta_in(i+1,j+1))) + &
-                  ((G%areaT(i+1,j) * eta_in(i+1,j)) + (G%areaT(i,j+1) * eta_in(i,j+1))), h_neglect) )
-      enddo ; enddo
+      if (CS%Coriolis_dry_as_land) then
+        !$OMP parallel do default(shared) private(hArea_q,hhArea_q)
+        do J=js-1,je ; do I=is-1,ie
+          hArea_q = ((G%areaT(i,  j  ) * eta_in(i,  j  )) + &
+                     (G%areaT(i+1,j+1) * eta_in(i+1,j+1))) + &
+                    ((G%areaT(i+1,j  ) * eta_in(i+1,j  )) + &
+                     (G%areaT(i,  j+1) * eta_in(i,  j+1)))
+          hhArea_q = ((G%areaT(i,  j  ) * (eta_in(i,  j  ) * eta_in(i,  j  ))) + &
+                      (G%areaT(i+1,j+1) * (eta_in(i+1,j+1) * eta_in(i+1,j+1)))) + &
+                     ((G%areaT(i+1,j  ) * (eta_in(i+1,j  ) * eta_in(i+1,j  ))) + &
+                      (G%areaT(i,  j+1) * (eta_in(i,  j+1) * eta_in(i,  j+1))))
+          q(I,J) = 0.25 * (CS%BT_Coriolis_scale * G%CoriolisBu(I,J)) * &
+               hArea_q / max( hhArea_q, h_neglect*h_neglect )
+        enddo ; enddo
+      else !not as_land
+        !$OMP parallel do default(shared)
+        do J=js-1,je ; do I=is-1,ie
+          ! q(I,J) = 0.25 * (CS%BT_Coriolis_scale * G%CoriolisBu(I,J)) * &
+          !      Area_q / max( hArea_q, h_neglect )
+          q(I,J) = 0.25 * (CS%BT_Coriolis_scale * G%CoriolisBu(I,J)) * &
+               ((G%areaT(i,j) + G%areaT(i+1,j+1)) + (G%areaT(i+1,j) + G%areaT(i,j+1))) / &
+               (max(((G%areaT(i,j) * eta_in(i,j)) + (G%areaT(i+1,j+1) * eta_in(i+1,j+1))) + &
+                    ((G%areaT(i+1,j) * eta_in(i+1,j)) + (G%areaT(i,j+1) * eta_in(i,j+1))), h_neglect) )
+        enddo ; enddo
+      endif !Coriolis_dry_as_land:else
     endif
 
     ! With very wide halos, q and D need to be calculated on the available data
@@ -4467,8 +4513,14 @@ subroutine barotropic_init(u, v, h, eta, Time, G, GV, US, param_file, diag, CS, 
 # include "version_variable.h"
   ! Local variables
   character(len=40)  :: mdl = "MOM_barotropic"  ! This module's name.
+  character(len=20)  :: tmpstr
   real :: Datu(SZIBS_(G),SZJ_(G))   ! Zonal open face area [H L ~> m2 or kg m-1].
   real :: Datv(SZI_(G),SZJBS_(G))   ! Meridional open face area [H L ~> m2 or kg m-1].
+  real :: Area_q        ! The sum of the ocean areas at the 4 adjacent thickness points [L2 ~> m2].
+  real :: hArea_q       ! The sum of area times thickness of the cells
+                        ! surrounding a q point [H L2 ~> m3 or kg].
+  real :: hhArea_q      ! The sum of area times thickness squared of the cells
+                        ! surrounding a q point, [H2 L2 ~> m4 or m kg].
   real :: gtot_estimate ! Summed GV%g_prime [L2 H-1 T-2 ~> m s-2 or m4 kg-1 s-2], to give an
                         ! upper-bound estimate for pbce.
   real :: SSH_extra     ! An estimate of how much higher SSH might get, for use
@@ -4500,6 +4552,7 @@ subroutine barotropic_init(u, v, h, eta, Time, G, GV, US, param_file, diag, CS, 
   type(group_pass_type) :: pass_static_data, pass_q_D_Cor
   type(group_pass_type) :: pass_bt_hbt_btav, pass_a_polarity
   integer :: default_answer_date  ! The default setting for the various ANSWER_DATE flags.
+  logical :: land_as_dry  ! If true, land cells are treated as "dry" ocean cells.
   logical :: use_BT_cont_type
   logical :: use_tides
   logical :: visc_rem_bug ! Stores the value of runtime paramter VISC_REM_BUG.
@@ -4683,6 +4736,28 @@ subroutine barotropic_init(u, v, h, eta, Time, G, GV, US, param_file, diag, CS, 
                  "the Arakawa & Hsu scheme is used.  If the internal "//&
                  "deformation radius is not resolved, the Sadourny scheme "//&
                  "should probably be used.", default=.true.)
+
+  call get_param(param_file, mdl, "CORIOLIS_DRY_AS_LAND", CS%Coriolis_dry_as_land, &
+                 "If true, the inverse q-grid thickness is calculated via hArea/hhArea "//&
+                 "rather than via Area/hArea. This treats dry ocean like land by "//&
+                 "favoring thicker adjacent edges.", default=.false.)
+
+  call get_param(param_file, mdl, "LAND_AS_DRY", land_as_dry, &
+                 default=.false., do_not_log=.true.)
+  if (CS%Coriolis_dry_as_land .or. land_as_dry) then
+    ! new Coriolis parameters are set, so we can check SADOURNY
+    call get_param(param_file, mdl, "CORIOLIS_SCHEME", tmpstr, &
+                   default="SADOURNY75_ENERGY", do_not_log=.true.)
+    if (CS%Sadourny) then
+      if (tmpstr == "ARAKAWA_HSU90" .or. tmpstr == "ARAKAWA_LAMB81") &
+        call MOM_error(FATAL, "barotropic_init: SADOURNY=True incompatible with CORIOLIS_SCHEME "//&
+                              "ARAKAWA_HSU90 or ARAKAWA_LAMB81.")
+    else !Arakawa & Hsu
+      if (tmpstr == "SADOURNY75_ENERGY" .or. tmpstr == "SADOURNY75_ENSTRO") &
+        call MOM_error(FATAL, "barotropic_init: SADOURNY=False incompatible with CORIOLIS_SCHEME "//&
+                              "SADOURNY75_ENERGY or SADOURNY75_ENSTRO.")
+    endif !Sadorney:else
+  endif !new Coriolis parameters
 
   call get_param(param_file, mdl, "BT_THICK_SCHEME", hvel_str, &
                  "A string describing the scheme that is used to set the "//&
@@ -4928,18 +5003,42 @@ subroutine barotropic_init(u, v, h, eta, Time, G, GV, US, param_file, diag, CS, 
     do J=js-1,je ; do i=is,ie
       CS%D_v_Cor(i,J) = 0.5 * (max(Mean_SL+G%bathyT(i,j+1),0.0) + max(Mean_SL+G%bathyT(i,j),0.0)) * Z_to_H
     enddo ; enddo
-    do J=js-1,je ; do I=is-1,ie
-      if (G%mask2dT(i,j)+G%mask2dT(i,j+1)+G%mask2dT(i+1,j)+G%mask2dT(i+1,j+1)>0.) then
-        CS%q_D(I,J) = 0.25 * (CS%BT_Coriolis_scale * G%CoriolisBu(I,J)) * &
-           ((G%areaT(i,j) + G%areaT(i+1,j+1)) + (G%areaT(i+1,j) + G%areaT(i,j+1))) / &
-           (Z_to_H * max((((G%areaT(i,j) * max(Mean_SL+G%bathyT(i,j),0.0)) + &
-                           (G%areaT(i+1,j+1) * max(Mean_SL+G%bathyT(i+1,j+1),0.0))) + &
-                          ((G%areaT(i+1,j) * max(Mean_SL+G%bathyT(i+1,j),0.0)) + &
-                           (G%areaT(i,j+1) * max(Mean_SL+G%bathyT(i,j+1),0.0)))), GV%H_subroundoff) )
-      else ! All four h points are masked out so q_D(I,J) will is meaningless
-        CS%q_D(I,J) = 0.
-      endif
-    enddo ; enddo
+    if (CS%Coriolis_dry_as_land) then
+      do J=js-1,je ; do I=is-1,ie
+        if (G%mask2dT(i,j)+G%mask2dT(i,j+1)+G%mask2dT(i+1,j)+G%mask2dT(i+1,j+1)>0.) then
+          hArea_q = ((G%areaT(i,  j  ) * max(Mean_SL+G%bathyT(i,  j  ),0.0)) + &
+                     (G%areaT(i+1,j+1) * max(Mean_SL+G%bathyT(i+1,j+1),0.0))) + &
+                    ((G%areaT(i+1,j  ) * max(Mean_SL+G%bathyT(i+1,j  ),0.0)) + &
+                     (G%areaT(i,  j+1) * max(Mean_SL+G%bathyT(i,  j+1),0.0)))
+          !using **2 to simplify logic
+          hhArea_q = ((G%areaT(i,  j  ) * max(Mean_SL+G%bathyT(i,  j  ),0.0)**2) + &
+                      (G%areaT(i+1,j+1) * max(Mean_SL+G%bathyT(i+1,j+1),0.0)**2)) + &
+                     ((G%areaT(i+1,j  ) * max(Mean_SL+G%bathyT(i+1,j  ),0.0)**2) + &
+                      (G%areaT(i,  j+1) * max(Mean_SL+G%bathyT(i,  j+1),0.0)**2))
+          CS%q_D(I,J) = 0.25 * (CS%BT_Coriolis_scale * G%CoriolisBu(I,J)) * &
+               hArea_q / max( hhArea_q, GV%H_subroundoff*GV%H_subroundoff )
+        else ! All four h points are masked out so q_D(I,J) will is meaningless
+             ! This might not be necessary, since hArea_q is probably zero
+          CS%q_D(I,J) = 0.
+        endif
+      enddo ; enddo
+    else !not as_land
+      do J=js-1,je ; do I=is-1,ie
+        if (G%mask2dT(i,j)+G%mask2dT(i,j+1)+G%mask2dT(i+1,j)+G%mask2dT(i+1,j+1)>0.) then
+          ! CS%q_D(I,J) = 0.25 * (CS%BT_Coriolis_scale * G%CoriolisBu(I,J)) * &
+          !      Area_q / max( hArea_q, GV%H_subroundoff )
+          CS%q_D(I,J) = 0.25 * (CS%BT_Coriolis_scale * G%CoriolisBu(I,J)) * &
+             ((G%areaT(i,j) + G%areaT(i+1,j+1)) + (G%areaT(i+1,j) + G%areaT(i,j+1))) / &
+             (Z_to_H * max((((G%areaT(i,j) * max(Mean_SL+G%bathyT(i,j),0.0)) + &
+                             (G%areaT(i+1,j+1) * max(Mean_SL+G%bathyT(i+1,j+1),0.0))) + &
+                            ((G%areaT(i+1,j) * max(Mean_SL+G%bathyT(i+1,j),0.0)) + &
+                             (G%areaT(i,j+1) * max(Mean_SL+G%bathyT(i,j+1),0.0)))), GV%H_subroundoff) )
+        else ! All four h points are masked out so q_D(I,J) will is meaningless
+          CS%q_D(I,J) = 0.
+        endif
+      enddo ; enddo
+    endif !Coriolis_dry_as_land:else
+
     ! With very wide halos, q and D need to be calculated on the available data
     ! domain and then updated onto the full computational domain.
     call create_group_pass(pass_q_D_Cor, CS%q_D, CS%BT_Domain, To_All, position=CORNER)

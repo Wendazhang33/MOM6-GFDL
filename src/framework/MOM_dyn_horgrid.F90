@@ -86,6 +86,7 @@ type, public :: dyn_horgrid_type
                  !! and the true northward directions [nondim].
 
   real, allocatable, dimension(:,:) :: &
+    mask2dU, &   !< 0 for land points and 1 for ocean points on the u-grid [nondim].
     mask2dCu, &  !< 0 for boundary points and 1 for ocean points on the u grid [nondim].
     OBCmaskCu, & !< 0 for boundary or OBC points and 1 for ocean points on the u grid [nondim].
     geoLatCu, &  !< The geographic latitude at u points [degrees of latitude] or [m].
@@ -99,6 +100,7 @@ type, public :: dyn_horgrid_type
     areaCu       !< The areas of the u-grid cells [L2 ~> m2].
 
   real, allocatable, dimension(:,:) :: &
+    mask2dV, &   !< 0 for land points and 1 for ocean points on the v-grid [nondim].
     mask2dCv, &  !< 0 for boundary points and 1 for ocean points on the v grid [nondim].
     OBCmaskCv, & !< 0 for boundary or OBC points and 1 for ocean points on the v grid [nondim].
     geoLatCv, &  !< The geographic latitude at v points [degrees of latitude] or [m].
@@ -257,6 +259,8 @@ subroutine create_dyn_horgrid(G, HI, bathymetry_at_vel)
   allocate(G%IareaBu(IsdB:IedB,JsdB:JedB), source=0.0)
 
   allocate(G%mask2dT(isd:ied,jsd:jed), source=0.0)
+  allocate(G%mask2dU(IsdB:IedB,jsd:jed), source=0.0)
+  allocate(G%mask2dV(isd:ied,JsdB:JedB), source=0.0)
   allocate(G%mask2dCu(IsdB:IedB,jsd:jed), source=0.0)
   allocate(G%mask2dCv(isd:ied,JsdB:JedB), source=0.0)
   allocate(G%mask2dBu(IsdB:IedB,JsdB:JedB), source=0.0)
@@ -343,6 +347,7 @@ subroutine rotate_dyn_horgrid(G_in, G, US, turns)
   call rotate_array_pair(G_in%dxCv, G_in%dyCu, turns, G%dxCv, G%dyCu)
   call rotate_array_pair(G_in%dx_Cv, G_in%dy_Cu, turns, G%dx_Cv, G%dy_Cu)
 
+  call rotate_array_pair(G_in%mask2dU, G_in%mask2dV, turns, G%mask2dU, G%mask2dV)
   call rotate_array_pair(G_in%mask2dCu, G_in%mask2dCv, turns, G%mask2dCu, G%mask2dCv)
   call rotate_array_pair(G_in%OBCmaskCu, G_in%OBCmaskCv, turns, G%OBCmaskCu, G%OBCmaskCv)
   call rotate_array_pair(G_in%areaCu, G_in%areaCv, turns, G%areaCu, G%areaCv)
@@ -518,7 +523,8 @@ subroutine destroy_dyn_horgrid(G)
   deallocate(G%areaCu) ; deallocate(G%IareaCu)
   deallocate(G%areaCv)  ; deallocate(G%IareaCv)
 
-  deallocate(G%mask2dT)  ; deallocate(G%mask2dCu) ; deallocate(G%OBCmaskCu)
+  deallocate(G%mask2dT)  ; deallocate(G%mask2dU) ; deallocate(G%mask2dV)
+  deallocate(G%mask2dCu) ; deallocate(G%OBCmaskCu)
   deallocate(G%mask2dCv) ; deallocate(G%OBCmaskCv) ; deallocate(G%mask2dBu)
 
   deallocate(G%geoLatT)  ; deallocate(G%geoLatCu)

@@ -89,6 +89,7 @@ type, public :: ocean_grid_type
                  !! and the true northward directions [nondim].
 
   real ALLOCABLE_, dimension(NIMEMB_PTR_,NJMEM_) :: &
+    mask2dU, &   !< 0 for land points and 1 for ocean points on the u-grid [nondim].
     mask2dCu, &  !< 0 for boundary points and 1 for ocean points on the u grid [nondim].
     OBCmaskCu, & !< 0 for boundary or OBC points and 1 for ocean points on the u grid [nondim].
     geoLatCu, &  !< The geographic latitude at u points [degrees_N] or [km] or [m]
@@ -102,6 +103,7 @@ type, public :: ocean_grid_type
     areaCu       !< The areas of the u-grid cells [L2 ~> m2].
 
   real ALLOCABLE_, dimension(NIMEM_,NJMEMB_PTR_) :: &
+    mask2dV, &   !< 0 for land points and 1 for ocean points on the v-grid [nondim].
     mask2dCv, &  !< 0 for boundary points and 1 for ocean points on the v grid [nondim].
     OBCmaskCv, & !< 0 for boundary or OBC points and 1 for ocean points on the v grid [nondim].
     geoLatCv, &  !< The geographic latitude at v points [degrees_N] or [km] or [m]
@@ -550,8 +552,10 @@ subroutine allocate_metrics(G)
   ALLOC_(G%IareaBu(IsdB:IedB,JsdB:JedB)) ; G%IareaBu(:,:) = 0.0
 
   ALLOC_(G%mask2dT(isd:ied,jsd:jed))      ; G%mask2dT(:,:) = 0.0
+  ALLOC_(G%mask2dU(IsdB:IedB,jsd:jed))    ; G%mask2dU(:,:) = 0.0
   ALLOC_(G%mask2dCu(IsdB:IedB,jsd:jed))   ; G%mask2dCu(:,:) = 0.0
   ALLOC_(G%OBCmaskCu(IsdB:IedB,jsd:jed))  ; G%OBCmaskCu(:,:) = 0.0
+  ALLOC_(G%mask2dV(isd:ied,JsdB:JedB))    ; G%mask2dV(:,:) = 0.0
   ALLOC_(G%mask2dCv(isd:ied,JsdB:JedB))   ; G%mask2dCv(:,:) = 0.0
   ALLOC_(G%OBCmaskCv(isd:ied,JsdB:JedB))  ; G%OBCmaskCv(:,:) = 0.0
   ALLOC_(G%mask2dBu(IsdB:IedB,JsdB:JedB)) ; G%mask2dBu(:,:) = 0.0
@@ -616,9 +620,10 @@ subroutine MOM_grid_end(G)
   DEALLOC_(G%areaT)  ; DEALLOC_(G%IareaT)
   DEALLOC_(G%areaBu) ; DEALLOC_(G%IareaBu)
   DEALLOC_(G%areaCu) ; DEALLOC_(G%IareaCu)
-  DEALLOC_(G%areaCv)  ; DEALLOC_(G%IareaCv)
+  DEALLOC_(G%areaCv) ; DEALLOC_(G%IareaCv)
 
-  DEALLOC_(G%mask2dT)  ; DEALLOC_(G%mask2dCu) ; DEALLOC_(G%OBCmaskCu)
+  DEALLOC_(G%mask2dT)  ; DEALLOC_(G%mask2dU) ; DEALLOC_(G%mask2dV)
+  DEALLOC_(G%mask2dCu) ; DEALLOC_(G%OBCmaskCu)
   DEALLOC_(G%mask2dCv) ; DEALLOC_(G%OBCmaskCv) ; DEALLOC_(G%mask2dBu)
 
   DEALLOC_(G%geoLatT)  ; DEALLOC_(G%geoLatCu)
@@ -666,8 +671,13 @@ end subroutine MOM_grid_end
 !! u-, v- and q- point coordinates are follow same pattern of replacing T with Cu, Cv and Bu respectively.
 !!
 !! Each location also has a 2D mask indicating whether the entire column is land or ocean.
-!! `mask2dT` is 1 if the column is wet or 0 if the T-cell is land.
+!! `mask2dT` is 1 if the column is ocean or 0 if the T-cell is land.
 !! `mask2dCu` is 1 if both neighboring columns are ocean, and 0 if either is land.
 !! `OBCmasku` is 1 if both neighboring columns are ocean, and 0 if either is land of if this is OBC point.
+!! `mask2dCv` is 1 if both neighboring columns are ocean, and 0 if either is land.
+!! `OBCmaskv` is 1 if both neighboring columns are ocean, and 0 if either is land of if this is OBC point.
+!! The following 2D masks are only used if DRY_LAND is set.
+!! `mask2dU` is 1 if the U-edge is ocean or 0 if the U-edge is land.
+!! `mask2dV` is 1 if the V-edge is ocean or 0 if the V-edge is land.
 
 end module MOM_grid

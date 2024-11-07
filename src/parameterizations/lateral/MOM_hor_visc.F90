@@ -39,6 +39,10 @@ type, public :: hor_visc_CS ; private
   logical :: Laplacian       !< Use a Laplacian horizontal viscosity if true.
   logical :: biharmonic      !< Use a biharmonic horizontal viscosity if true.
   logical :: debug           !< If true, write verbose checksums for debugging purposes.
+  logical :: land_as_dry     !< If true, land cells are treated as "dry" ocean cells.
+                             !! In other words cells with zero thickness and
+                             !! zero velocity.  With this approach there are
+                             !! no momentum land/sea boundary conditions.
   logical :: no_slip         !< If true, no slip boundary conditions are used.
                              !! Otherwise free slip boundary conditions are assumed.
                              !! The implementation of the free slip boundary
@@ -105,8 +109,7 @@ type, public :: hor_visc_CS ; private
   logical :: use_land_mask   !< Use the land mask for the computation of thicknesses
                              !! at velocity locations. This eliminates the dependence on
                              !! arbitrary values over land or outside of the domain.
-                             !! Default is False to maintain answers with legacy experiments
-                             !! but should be changed to True for new experiments.
+                             !! Default is .not.land_as_dry
   logical :: anisotropic     !< If true, allow anisotropic component to the viscosity.
   logical :: add_LES_viscosity!< If true, adds the viscosity from Smagorinsky and Leith to
                              !! the background viscosity instead of taking the maximum.
@@ -268,15 +271,15 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
   type(ocean_grid_type),         intent(in)  :: G      !< The ocean's grid structure.
   type(verticalGrid_type),       intent(in)  :: GV     !< The ocean's vertical grid structure.
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                                 intent(in)  :: u      !< The zonal velocity [L T-1 ~> m s-1].
+                                 intent(inout) :: u    !< The zonal velocity [L T-1 ~> m s-1].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                                 intent(in)  :: v      !< The meridional velocity [L T-1 ~> m s-1].
+                                 intent(inout) :: v    !< The meridional velocity [L T-1 ~> m s-1].
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)), &
                                  intent(inout) :: h    !< Layer thicknesses [H ~> m or kg m-2].
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
-                                 intent(in)  :: uh      !< The zonal volume transport [H L2 T-1 ~> m3 s-1].
+                                 intent(inout) :: uh   !< The zonal volume transport [H L2 T-1 ~> m3 s-1].
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), &
-                                 intent(in)  :: vh      !< The meridional volume transport [H L2 T-1 ~> m3 s-1].
+                                 intent(inout) :: vh   !< The meridional volume transport [H L2 T-1 ~> m3 s-1].
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), &
                                  intent(out) :: diffu  !< Zonal acceleration due to convergence of
                                                        !! along-coordinate stress tensor [L T-2 ~> m s-2]
@@ -547,6 +550,28 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
   legacy_bound = (CS%Smagorinsky_Kh .or. CS%Leith_Kh) .and. &
                  (CS%bound_Kh .and. .not.CS%better_bound_Kh)
 
+  if (CS%land_as_dry) then
+    ! mask the full array extents to make sure we have covered all loops
+    ! arrays are marked inout because of this masking, otherwise unchanged
+    do k=1,nz ; do j=G%jsd,G%jed ; do i=G%isd,G%ied
+      h(i,j,k) = G%mask2dT(i,j) * h(i,j,k)
+    enddo; enddo; enddo
+    do k=1,nz ; do j=G%jsd,G%jed ; do I=G%IsdB,G%IedB
+       u(I,j,k) = G%mask2dU(I,j) *  u(I,j,k)
+      uh(I,j,k) = G%mask2dU(I,j) * uh(I,j,k)
+      if (use_cont_huv) then
+        hu_cont(I,j,k) = G%mask2dU(I,j) * hu_cont(I,j,k)
+      endif
+    enddo; enddo; enddo
+    do k=1,nz ; do J=G%JsdB,G%JedB ; do i=G%isd,G%ied
+       v(i,J,k) = G%mask2dV(i,J) *  v(i,J,k)
+      vh(i,J,k) = G%mask2dV(i,J) * vh(i,J,k)
+      if (use_cont_huv) then
+        hv_cont(i,J,k) = G%mask2dV(i,J) * hv_cont(i,J,k)
+      endif
+    enddo; enddo; enddo
+  endif !land_as_dry
+
   if (CS%use_GME) then
 
     ! Initialize diagnostic arrays with zeros
@@ -560,6 +585,15 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
 
     call pass_vector(ubtav, vbtav, G%Domain)
     call pass_var(h, G%domain, halo=2)
+
+    if (CS%land_as_dry) then
+      do j=G%jsd,G%jed ; do I=G%IsdB,G%IedB
+         ubtav(I,j) = G%mask2dU(I,j) * ubtav(I,j)
+      enddo; enddo
+      do J=G%JsdB,G%JedB ; do i=G%isd,G%ied
+         vbtav(i,J) = G%mask2dV(i,J) * vbtav(i,J)
+      enddo; enddo
+    endif !land_as_dry
 
     ! Calculate the barotropic horizontal tension
     do j=js-2,je+2 ; do i=is-2,ie+2
@@ -580,15 +614,19 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
                                     - (ubtav(I,j)*G%IdxCu(I,j)))
     enddo ; enddo
 
-    if (CS%no_slip) then
+   if (CS%land_as_dry) then  !no mask2d
+      do J=js-2,je+1 ; do I=is-2,ie+1
+        sh_xy_bt(I,J) = ( dvdx_bt(I,J) + dudy_bt(I,J) )
+      enddo ; enddo
+    elseif (CS%no_slip) then
       do J=js-2,je+1 ; do I=is-2,ie+1
         sh_xy_bt(I,J) = (2.0-G%mask2dBu(I,J)) * ( dvdx_bt(I,J) + dudy_bt(I,J) )
       enddo ; enddo
-    else
+    else !free slip
       do J=js-2,je+1 ; do I=is-2,ie+1
         sh_xy_bt(I,J) = G%mask2dBu(I,J) * ( dvdx_bt(I,J) + dudy_bt(I,J) )
       enddo ; enddo
-    endif
+    endif !land_as_dry:no_slip:else
 
     do j=js-2,je+2 ; do i=is-2,ie+2
       htot(i,j) = 0.0
@@ -598,34 +636,60 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
     enddo ; enddo ; enddo
 
     I_GME_h0 = 1.0 / CS%GME_h0
-    do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
-      boundary_mask_h = (G%mask2dCu(I,j) * G%mask2dCu(I-1,j)) * (G%mask2dCv(i,J) * G%mask2dCv(i,J-1))
-      grad_vel_mag_bt_h = G%mask2dT(I,J) * boundary_mask_h * (dudx_bt(i,j)**2 + dvdy_bt(i,j)**2 + &
-            (0.25*((dvdx_bt(I,J)+dvdx_bt(I-1,J-1)) + (dvdx_bt(I,J-1)+dvdx_bt(I-1,J))))**2 + &
-            (0.25*((dudy_bt(I,J)+dudy_bt(I-1,J-1)) + (dudy_bt(I,J-1)+dudy_bt(I-1,J))))**2)
-      ! Probably the following test could be simplified to
-      ! if (boundary_mask_h * G%mask2dT(I,J) > 0.0) then
-      if (grad_vel_mag_bt_h > 0.0) then
-        GME_effic_h(i,j) = CS%GME_efficiency * G%mask2dT(I,J) * (MIN(htot(i,j) * I_GME_h0, 1.0)**2)
-      else
-        GME_effic_h(i,j) = 0.0
-      endif
-    enddo ; enddo
+    if (CS%land_as_dry) then  !no mask2d
+      do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+        grad_vel_mag_bt_h = (dudx_bt(i,j)**2 + dvdy_bt(i,j)**2 + &
+              (0.25*((dvdx_bt(I,J)+dvdx_bt(I-1,J-1)) + (dvdx_bt(I,J-1)+dvdx_bt(I-1,J))))**2 + &
+              (0.25*((dudy_bt(I,J)+dudy_bt(I-1,J-1)) + (dudy_bt(I,J-1)+dudy_bt(I-1,J))))**2)
+        if (grad_vel_mag_bt_h > 0.0) then
+          GME_effic_h(i,j) = CS%GME_efficiency * (MIN(htot(i,j) * I_GME_h0, 1.0)**2)
+        else
+          GME_effic_h(i,j) = 0.0
+        endif
+      enddo ; enddo
 
-    do J=js-2,je+1 ; do I=is-2,ie+1
-      boundary_mask_q = (G%mask2dCv(i,J) * G%mask2dCv(i+1,J)) * (G%mask2dCu(I,j) * G%mask2dCu(I,j+1))
-      grad_vel_mag_bt_q = G%mask2dBu(I,J) * boundary_mask_q * (dvdx_bt(I,J)**2 + dudy_bt(I,J)**2 + &
-            (0.25*((dudx_bt(i,j)+dudx_bt(i+1,j+1)) + (dudx_bt(i,j+1)+dudx_bt(i+1,j))))**2 + &
-            (0.25*((dvdy_bt(i,j)+dvdy_bt(i+1,j+1)) + (dvdy_bt(i,j+1)+dvdy_bt(i+1,j))))**2)
-      ! Probably the following test could be simplified to
-      ! if (boundary_mask_q * G%mask2dBu(I,J) > 0.0) then
-      if (grad_vel_mag_bt_q > 0.0) then
-        h_arith_q = 0.25 * ((htot(i,j) + htot(i+1,j+1)) + (htot(i+1,j) + htot(i,j+1)))
-        GME_effic_q(I,J) = CS%GME_efficiency * G%mask2dBu(I,J) * (MIN(h_arith_q * I_GME_h0, 1.0)**2)
-      else
-        GME_effic_q(I,J) = 0.0
-      endif
-    enddo ; enddo
+      do J=js-2,je+1 ; do I=is-2,ie+1
+        ! not clear that this is required
+        grad_vel_mag_bt_q = (dvdx_bt(I,J)**2 + dudy_bt(I,J)**2 + &
+              (0.25*((dudx_bt(i,j)+dudx_bt(i+1,j+1)) + (dudx_bt(i,j+1)+dudx_bt(i+1,j))))**2 + &
+              (0.25*((dvdy_bt(i,j)+dvdy_bt(i+1,j+1)) + (dvdy_bt(i,j+1)+dvdy_bt(i+1,j))))**2)
+        if (grad_vel_mag_bt_q > 0.0) then
+          h_arith_q = 0.25 * ((htot(i,j) + htot(i+1,j+1)) + (htot(i+1,j) + htot(i,j+1)))
+          GME_effic_q(I,J) = CS%GME_efficiency * (MIN(h_arith_q * I_GME_h0, 1.0)**2)
+        else
+          GME_effic_q(I,J) = 0.0
+        endif
+      enddo ; enddo
+    else !.not.land_as_dry
+      do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+        boundary_mask_h = (G%mask2dCu(I,j) * G%mask2dCu(I-1,j)) * (G%mask2dCv(i,J) * G%mask2dCv(i,J-1))
+        grad_vel_mag_bt_h = G%mask2dT(I,J) * boundary_mask_h * (dudx_bt(i,j)**2 + dvdy_bt(i,j)**2 + &
+              (0.25*((dvdx_bt(I,J)+dvdx_bt(I-1,J-1)) + (dvdx_bt(I,J-1)+dvdx_bt(I-1,J))))**2 + &
+              (0.25*((dudy_bt(I,J)+dudy_bt(I-1,J-1)) + (dudy_bt(I,J-1)+dudy_bt(I-1,J))))**2)
+        ! Probably the following test could be simplified to
+        ! if (boundary_mask_h * G%mask2dT(I,J) > 0.0) then
+        if (grad_vel_mag_bt_h > 0.0) then
+          GME_effic_h(i,j) = CS%GME_efficiency * G%mask2dT(I,J) * (MIN(htot(i,j) * I_GME_h0, 1.0)**2)
+        else
+          GME_effic_h(i,j) = 0.0
+        endif
+      enddo ; enddo
+
+      do J=js-2,je+1 ; do I=is-2,ie+1
+        boundary_mask_q = (G%mask2dCv(i,J) * G%mask2dCv(i+1,J)) * (G%mask2dCu(I,j) * G%mask2dCu(I,j+1))
+        grad_vel_mag_bt_q = G%mask2dBu(I,J) * boundary_mask_q * (dvdx_bt(I,J)**2 + dudy_bt(I,J)**2 + &
+              (0.25*((dudx_bt(i,j)+dudx_bt(i+1,j+1)) + (dudx_bt(i,j+1)+dudx_bt(i+1,j))))**2 + &
+              (0.25*((dvdy_bt(i,j)+dvdy_bt(i+1,j+1)) + (dvdy_bt(i,j+1)+dvdy_bt(i+1,j))))**2)
+        ! Probably the following test could be simplified to
+        ! if (boundary_mask_q * G%mask2dBu(I,J) > 0.0) then
+        if (grad_vel_mag_bt_q > 0.0) then
+          h_arith_q = 0.25 * ((htot(i,j) + htot(i+1,j+1)) + (htot(i+1,j) + htot(i,j+1)))
+          GME_effic_q(I,J) = CS%GME_efficiency * G%mask2dBu(I,J) * (MIN(h_arith_q * I_GME_h0, 1.0)**2)
+        else
+          GME_effic_q(I,J) = 0.0
+        endif
+      enddo ; enddo
+    endif !land_as_dry:else
 
     call thickness_diffuse_get_KH(TD, KH_u_GME, KH_v_GME, G, GV)
 
@@ -643,7 +707,7 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
       ! One call applies the filter twice
       u_smooth(:,:,k) = u(:,:,k)
       v_smooth(:,:,k) = v(:,:,k)
-      call smooth_x9_uv(G, u_smooth(:,:,k), v_smooth(:,:,k), zero_land=.false.)
+      call smooth_x9_uv(G, u_smooth(:,:,k), v_smooth(:,:,k), CS%land_as_dry, zero_land=.false.)
     enddo
     call pass_vector(u_smooth, v_smooth, G%Domain)
   endif
@@ -759,7 +823,7 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
       do J=Jsq-1,Jeq+1 ; do i=is-2,ie+2
         h_v(i,J) = hv_cont(i,J,k)
       enddo ; enddo
-    elseif (CS%use_land_mask) then
+    elseif (CS%use_land_mask) then  !.not.land_as_dry
       do j=js-2,je+2 ; do I=is-2,Ieq+1
         h_u(I,j) = 0.5 * (G%mask2dT(i,j)*h(i,j,k) + G%mask2dT(i+1,j)*h(i+1,j,k))
       enddo ; enddo
@@ -897,30 +961,39 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
 
     ! Shearing strain (including no-slip boundary conditions at the 2-D land-sea mask).
     ! dudy and dvdx include modifications at OBCs from above.
-    if (CS%no_slip) then
+    if (CS%land_as_dry) then  !no mask2d
+      do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
+        sh_xy(I,J) = ( dvdx(I,J) + dudy(I,J) )
+        if (CS%id_shearstress > 0) ShSt(I,J,k) = sh_xy(I,J)
+      enddo ; enddo
+    elseif (CS%no_slip) then
       do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
         sh_xy(I,J) = (2.0-G%mask2dBu(I,J)) * ( dvdx(I,J) + dudy(I,J) )
         if (CS%id_shearstress > 0) ShSt(I,J,k) = sh_xy(I,J)
       enddo ; enddo
-    else
+    else !free slip
       do J=js-2,Jeq+1 ; do I=is-2,Ieq+1
         sh_xy(I,J) = G%mask2dBu(I,J) * ( dvdx(I,J) + dudy(I,J) )
         if (CS%id_shearstress > 0) ShSt(I,J,k) = sh_xy(I,J)
       enddo ; enddo
-    endif
+    endif !land_as_dry:no_slip:else
 
     if (CS%use_Leithy) then
       ! Shearing strain (including no-slip boundary conditions at the 2-D land-sea mask).
       ! dudy_smooth and dvdx_smooth do not (yet) include modifications at OBCs from above.
-      if (CS%no_slip) then
+      if (CS%land_as_dry) then  !no mask2d
+        do J=js-1,Jeq ; do I=is-1,Ieq
+          sh_xy_smooth(I,J) = ( dvdx_smooth(I,J) + dudy_smooth(I,J) )
+        enddo ; enddo
+      elseif (CS%no_slip) then
         do J=js-1,Jeq ; do I=is-1,Ieq
           sh_xy_smooth(I,J) = (2.0-G%mask2dBu(I,J)) * ( dvdx_smooth(I,J) + dudy_smooth(I,J) )
         enddo ; enddo
-      else
+      else !free slip
         do J=js-1,Jeq ; do I=is-1,Ieq
           sh_xy_smooth(I,J) = G%mask2dBu(I,J) * ( dvdx_smooth(I,J) + dudy_smooth(I,J) )
         enddo ; enddo
-      endif
+      endif !land_as_dry:no_slip:else
     endif ! use Leith+E
 
     !  Evaluate Del2u = x.Div(Grad u) and Del2v = y.Div( Grad u)
@@ -951,27 +1024,35 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
 
     ! Vorticity
     if ((CS%Leith_Kh) .or. (CS%Leith_Ah) .or. (CS%use_Leithy) .or. (CS%id_vort_xy_q>0) .or. CS%use_ZB2020) then
-      if (CS%no_slip) then
+      if (CS%land_as_dry) then  !no mask2d
+        do J=js_vort,je_vort ; do I=is_vort,ie_vort
+          vort_xy(I,J) = ( dvdx(I,J) - dudy(I,J) )
+        enddo ; enddo
+      elseif (CS%no_slip) then
         do J=js_vort,je_vort ; do I=is_vort,ie_vort
           vort_xy(I,J) = (2.0-G%mask2dBu(I,J)) * ( dvdx(I,J) - dudy(I,J) )
         enddo ; enddo
-      else
+      else !free slip
         do J=js_vort,je_vort ; do I=is_vort,ie_vort
           vort_xy(I,J) = G%mask2dBu(I,J) * ( dvdx(I,J) - dudy(I,J) )
         enddo ; enddo
-      endif
+      endif !land_as_dry:no_slip:else
     endif
 
     if (CS%use_Leithy) then
-      if (CS%no_slip) then
+      if (CS%land_as_dry) then  !no mask2d
+        do J=js_Kh-1,je_Kh ; do I=is_Kh-1,ie_Kh
+          vort_xy_smooth(I,J) = ( dvdx_smooth(I,J) - dudy_smooth(I,J) )
+        enddo ; enddo
+      elseif (CS%no_slip) then
         do J=js_Kh-1,je_Kh ; do I=is_Kh-1,ie_Kh
           vort_xy_smooth(I,J) = (2.0-G%mask2dBu(I,J)) * ( dvdx_smooth(I,J) - dudy_smooth(I,J) )
         enddo ; enddo
-      else
+      else !free slip
         do J=js_Kh-1,je_Kh ; do I=is_Kh-1,ie_Kh
           vort_xy_smooth(I,J) = G%mask2dBu(I,J) * ( dvdx_smooth(I,J) - dudy_smooth(I,J) )
         enddo ; enddo
-      endif
+      endif !land_as_dry:no_slip:else
     endif
 
 
@@ -1324,7 +1405,7 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
           if (CS%smooth_Ah) then
             ! Smooth m_leithy.  A single call smoothes twice.
             call pass_var(m_leithy, G%Domain, halo=2)
-            call smooth_x9_h(G, m_leithy, zero_land=.true.)
+            call smooth_x9_h(G, m_leithy, CS%land_as_dry, zero_land=.true.)
             call pass_var(m_leithy, G%Domain)
           endif
           ! Get Ah
@@ -1343,7 +1424,7 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
             enddo ; enddo
             call pass_var(Ah_sq, G%Domain, halo=2)
             ! A single call smoothes twice.
-            call smooth_x9_h(G, Ah_sq, zero_land=.false.)
+            call smooth_x9_h(G, Ah_sq, CS%land_as_dry, zero_land=.false.)
             call pass_var(Ah_sq, G%Domain)
             do j=js_Kh,je_Kh ; do i=is_Kh,ie_Kh
               Ah_h(i,j,k) = max(CS%Ah_bg_xx(i,j), sqrt(max(0., Ah_sq(i,j))))
@@ -1521,11 +1602,10 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
 
     if (CS%no_slip) then
       do J=js-1,Jeq ; do I=is-1,Ieq
-        if (CS%no_slip .and. (G%mask2dBu(I,J) < 0.5)) then
+        if (G%mask2dBu(I,J) < 0.5) then
           if ((G%mask2dCu(I,j) + G%mask2dCu(I,j+1)) + &
               (G%mask2dCv(i,J) + G%mask2dCv(i+1,J)) > 0.0) then
             ! This is a coastal vorticity point, so modify hq and hrat_min.
-
             hu = G%mask2dCu(I,j) * h_u(I,j) + G%mask2dCu(I,j+1) * h_u(I,j+1)
             hv = G%mask2dCv(i,J) * h_v(i,J) + G%mask2dCv(i+1,J) * h_v(i+1,J)
             if ((G%mask2dCu(I,j) + G%mask2dCu(I,j+1)) * &
@@ -1842,15 +1922,19 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
       enddo ; enddo
 
       ! This adds in GME and changes the units of str_xx from [L2 T-2 ~> m2 s-2] to [H L2 T-2 ~> m3 s-2 or kg s-2].
-      if (CS%no_slip) then
+      if (CS%land_as_dry) then  !no mask2d
         do J=js-1,Jeq ; do I=is-1,Ieq
           str_xy(I,J) = (str_xy(I,J) + str_xy_GME(I,J)) * (hq(I,J) * CS%reduction_xy(I,J))
         enddo ; enddo
-      else
+      elseif (CS%no_slip) then
+        do J=js-1,Jeq ; do I=is-1,Ieq
+          str_xy(I,J) = (str_xy(I,J) + str_xy_GME(I,J)) * (hq(I,J) * CS%reduction_xy(I,J))
+        enddo ; enddo
+      else !free slip
         do J=js-1,Jeq ; do I=is-1,Ieq
           str_xy(I,J) = (str_xy(I,J) + str_xy_GME(I,J)) * (hq(I,J) * G%mask2dBu(I,J) * CS%reduction_xy(I,J))
         enddo ; enddo
-      endif
+      endif !land_as_dry:no_slip:else
 
     else ! .not. use_GME
       ! This changes the units of str_xx from [L2 T-2 ~> m2 s-2] to [H L2 T-2 ~> m3 s-2 or kg s-2].
@@ -1859,15 +1943,19 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
       enddo ; enddo
 
       ! This changes the units of str_xy from [L2 T-2 ~> m2 s-2] to [H L2 T-2 ~> m3 s-2 or kg s-2].
-      if (CS%no_slip) then
+      if (CS%land_as_dry) then  !no mask2d
         do J=js-1,Jeq ; do I=is-1,Ieq
           str_xy(I,J) = str_xy(I,J) * (hq(I,J) * CS%reduction_xy(I,J))
         enddo ; enddo
-      else
+      elseif (CS%no_slip) then
+        do J=js-1,Jeq ; do I=is-1,Ieq
+          str_xy(I,J) = str_xy(I,J) * (hq(I,J) * CS%reduction_xy(I,J))
+        enddo ; enddo
+      else !free slip
         do J=js-1,Jeq ; do I=is-1,Ieq
           str_xy(I,J) = str_xy(I,J) * (hq(I,J) * G%mask2dBu(I,J) * CS%reduction_xy(I,J))
         enddo ; enddo
-      endif
+      endif !land_as_dry:no_slip:else
     endif ! use_GME
 
     ! Evaluate 1/h x.Div(h Grad u) or the biharmonic equivalent.
@@ -2576,6 +2664,17 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
                  "cleaner than the no slip BCs. The use of free slip BCs "//&
                  "is strongly encouraged, and no slip BCs are not used with "//&
                  "the biharmonic viscosity.", default=.false.)
+  call get_param(param_file, mdl, "LAND_AS_DRY", CS%land_as_dry, &
+                 "If true, land cells are treated as dry ocean cells. "//&
+                 "In other words cells with zero thickness and zero velocity. "//&
+                 "With this approach there are no momentum land/sea boundary conditions.", &
+                 default=.false.)
+  if (CS%no_slip .and. CS%land_as_dry) &
+    call MOM_error(FATAL,"ERROR: NOSLIP and LAND_AS_DRY cannot be defined at the same time.")
+  if (CS%use_land_mask .and. CS%land_as_dry) &
+    call MOM_error(FATAL, &
+      "ERROR: USE_LAND_MASK_FOR_HVISC and LAND_AS_DRY cannot be defined at the same time.")
+
   call get_param(param_file, mdl, "USE_KH_BG_2D", CS%use_Kh_bg_2d, &
                  "If true, read a file containing 2-d background harmonic "//&
                  "viscosities. The final viscosity is the maximum of the other "//&
@@ -3248,19 +3347,33 @@ subroutine smooth_GME(CS, G, GME_flux_h, GME_flux_q)
       endif
       GME_flux_h_original(:,:) = GME_flux_h(:,:)
       ! apply smoothing on GME
-      do j=Jsq-xh,Jeq+1+xh ; do i=Isq-xh,Ieq+1+xh
-        ! skip land points
-        if (G%mask2dT(i,j)==0.) cycle
-        ! compute weights
-        ww = 0.125 * G%mask2dT(i-1,j)
-        we = 0.125 * G%mask2dT(i+1,j)
-        ws = 0.125 * G%mask2dT(i,j-1)
-        wn = 0.125 * G%mask2dT(i,j+1)
-        wc = 1.0 - ((ww+we)+(wn+ws))
-        GME_flux_h(i,j) =  wc * GME_flux_h_original(i,j)   &
-                         + ((ww * GME_flux_h_original(i-1,j) + we * GME_flux_h_original(i+1,j)) &
-                          + (ws * GME_flux_h_original(i,j-1) + wn * GME_flux_h_original(i,j+1)))
-      enddo ; enddo
+      if (CS%land_as_dry) then  !no mask2d
+        do j=Jsq-xh,Jeq+1+xh ; do i=Isq-xh,Ieq+1+xh
+          ! compute weights
+          ww = 0.125
+          we = 0.125
+          ws = 0.125
+          wn = 0.125
+          wc = 1.0 - ((ww+we)+(wn+ws))
+          GME_flux_h(i,j) =  wc * GME_flux_h_original(i,j)   &
+                           + ((ww * GME_flux_h_original(i-1,j) + we * GME_flux_h_original(i+1,j)) &
+                            + (ws * GME_flux_h_original(i,j-1) + wn * GME_flux_h_original(i,j+1)))
+        enddo ; enddo
+      else !.not.land_as_dry
+        do j=Jsq-xh,Jeq+1+xh ; do i=Isq-xh,Ieq+1+xh
+          ! skip land points
+          if (G%mask2dT(i,j)==0.) cycle
+          ! compute weights
+          ww = 0.125 * G%mask2dT(i-1,j)
+          we = 0.125 * G%mask2dT(i+1,j)
+          ws = 0.125 * G%mask2dT(i,j-1)
+          wn = 0.125 * G%mask2dT(i,j+1)
+          wc = 1.0 - ((ww+we)+(wn+ws))
+          GME_flux_h(i,j) =  wc * GME_flux_h_original(i,j)   &
+                           + ((ww * GME_flux_h_original(i-1,j) + we * GME_flux_h_original(i+1,j)) &
+                            + (ws * GME_flux_h_original(i,j-1) + wn * GME_flux_h_original(i,j+1)))
+        enddo ; enddo
+      endif !land_as_dry:else
       xh = xh - 1
     endif
     if (present(GME_flux_q)) then
@@ -3272,19 +3385,33 @@ subroutine smooth_GME(CS, G, GME_flux_h, GME_flux_q)
       endif
       GME_flux_q_original(:,:) = GME_flux_q(:,:)
       ! apply smoothing on GME
-      do J=js-1-xq,je+xq ; do I=is-1-xq,ie+xq
-        ! skip land points
-        if (G%mask2dBu(I,J)==0.) cycle
-        ! compute weights
-        ww = 0.125 * G%mask2dBu(I-1,J)
-        we = 0.125 * G%mask2dBu(I+1,J)
-        ws = 0.125 * G%mask2dBu(I,J-1)
-        wn = 0.125 * G%mask2dBu(I,J+1)
-        wc = 1.0 - ((ww+we)+(wn+ws))
-        GME_flux_q(I,J) =  wc * GME_flux_q_original(I,J)   &
-                         + ((ww * GME_flux_q_original(I-1,J) + we * GME_flux_q_original(I+1,J)) &
-                          + (ws * GME_flux_q_original(I,J-1) + wn * GME_flux_q_original(I,J+1)))
-      enddo ; enddo
+      if (CS%land_as_dry) then  !no mask2d
+        do J=js-1-xq,je+xq ; do I=is-1-xq,ie+xq
+          ! compute weights
+          ww = 0.125
+          we = 0.125
+          ws = 0.125
+          wn = 0.125
+          wc = 1.0 - ((ww+we)+(wn+ws))
+          GME_flux_q(I,J) =  wc * GME_flux_q_original(I,J)   &
+                           + ((ww * GME_flux_q_original(I-1,J) + we * GME_flux_q_original(I+1,J)) &
+                            + (ws * GME_flux_q_original(I,J-1) + wn * GME_flux_q_original(I,J+1)))
+        enddo ; enddo
+      else !.not.land_as_dry
+        do J=js-1-xq,je+xq ; do I=is-1-xq,ie+xq
+          ! skip land points
+          if (G%mask2dBu(I,J)==0.) cycle
+          ! compute weights
+          ww = 0.125 * G%mask2dBu(I-1,J)
+          we = 0.125 * G%mask2dBu(I+1,J)
+          ws = 0.125 * G%mask2dBu(I,J-1)
+          wn = 0.125 * G%mask2dBu(I,J+1)
+          wc = 1.0 - ((ww+we)+(wn+ws))
+          GME_flux_q(I,J) =  wc * GME_flux_q_original(I,J)   &
+                           + ((ww * GME_flux_q_original(I-1,J) + we * GME_flux_q_original(I+1,J)) &
+                            + (ws * GME_flux_q_original(I,J-1) + wn * GME_flux_q_original(I,J+1)))
+        enddo ; enddo
+      endif !land_as_dry:else
       xq = xq - 1
     endif
   enddo ! s-loop
@@ -3295,9 +3422,11 @@ end subroutine smooth_GME
 !! Note that this subroutine does not conserve mass, so don't use it in situations where you
 !! need conservation.  Also note that it assumes that the input field has valid values in the
 !! first two halo points upon entry.
-subroutine smooth_x9_h(G, field_h, zero_land)
+subroutine smooth_x9_h(G, field_h, land_as_dry, zero_land)
   type(ocean_grid_type),            intent(in)    :: G         !< Ocean grid
   real, dimension(SZI_(G),SZJ_(G)), intent(inout) :: field_h   !< h-point field to be smoothed [arbitrary]
+  logical,                          intent(in)    :: land_as_dry  !< If true, land cells are treated
+                                                               !! as "dry" ocean cells.
   logical,                optional, intent(in)    :: zero_land !< If present and false, return the average
                                                                !! of the surrounding ocean points when
                                                                !! smoothing, otherwise use a value of 0 for
@@ -3313,24 +3442,45 @@ subroutine smooth_x9_h(G, field_h, zero_land)
 
   zero_land_val = .true. ; if (present(zero_land)) zero_land_val = zero_land
 
-  do s=1,0,-1
-    fh_prev(:,:) = field_h(:,:)
-    ! apply smoothing on field_h using rotationally symmetric expressions.
-    do j=js-s,je+s ; do i=is-s,ie+s ; if (G%mask2dT(i,j) > 0.0) then
-      Iwts = 0.0625
-      if (.not. zero_land_val) &
-        Iwts = 1.0 / ( (4.0*G%mask2dT(i,j) + &
-                        ( 2.0*((G%mask2dT(i-1,j) + G%mask2dT(i+1,j)) + &
-                               (G%mask2dT(i,j-1) + G%mask2dT(i,j+1))) + &
-                         ((G%mask2dT(i-1,j-1) + G%mask2dT(i+1,j+1)) + &
-                          (G%mask2dT(i-1,j+1) + G%mask2dT(i+1,j-1))) ) ) + 1.0e-16 )
-      field_h(i,j) = Iwts * ( 4.0*G%mask2dT(i,j) * fh_prev(i,j) &
-                            + (2.0*((G%mask2dT(i-1,j) * fh_prev(i-1,j) + G%mask2dT(i+1,j) * fh_prev(i+1,j)) + &
-                                    (G%mask2dT(i,j-1) * fh_prev(i,j-1) + G%mask2dT(i,j+1) * fh_prev(i,j+1))) &
-                              + ((G%mask2dT(i-1,j-1) * fh_prev(i-1,j-1) + G%mask2dT(i+1,j+1) * fh_prev(i+1,j+1)) + &
-                                 (G%mask2dT(i-1,j+1) * fh_prev(i-1,j+1) + G%mask2dT(i+1,j-1) * fh_prev(i-1,j-1))) ))
-    endif ; enddo ; enddo
-  enddo
+  if (land_as_dry) then  !no mask2d
+    do s=1,0,-1
+      fh_prev(:,:) = field_h(:,:)
+      ! apply smoothing on field_h using rotationally symmetric expressions.
+      do j=js-s,je+s ; do i=is-s,ie+s
+        Iwts = 0.0625
+        field_h(i,j) = Iwts * (  4.0 * fh_prev(i,j) &
+                              + (2.0*((fh_prev(i-1,j) + fh_prev(i+1,j)) + &
+                                      (fh_prev(i,j-1) + fh_prev(i,j+1))) &
+                                + ((fh_prev(i-1,j-1) + fh_prev(i+1,j+1)) + &
+                                   (fh_prev(i-1,j+1) + fh_prev(i-1,j-1))) ) )
+      enddo ; enddo
+    enddo !s
+  else !.not.land_as_dry
+    do s=1,0,-1
+      fh_prev(:,:) = field_h(:,:)
+      ! apply smoothing on field_h using rotationally symmetric expressions.
+      do j=js-s,je+s ; do i=is-s,ie+s
+        if (G%mask2dT(i,j) > 0.0) then
+          Iwts = 0.0625
+          if (.not. zero_land_val) &
+            Iwts = 1.0 / ( (4.0*G%mask2dT(i,j) + &
+                            ( 2.0*((G%mask2dT(i-1,j) + G%mask2dT(i+1,j)) + &
+                                   (G%mask2dT(i,j-1) + G%mask2dT(i,j+1))) + &
+                             ((G%mask2dT(i-1,j-1) + G%mask2dT(i+1,j+1)) + &
+                              (G%mask2dT(i-1,j+1) + G%mask2dT(i+1,j-1))) ) ) + 1.0e-16 )
+          field_h(i,j) = Iwts * ( 4.0*G%mask2dT(i,j) * fh_prev(i,j) &
+                                + (2.0*((G%mask2dT(i-1,j) * fh_prev(i-1,j) + &
+                                         G%mask2dT(i+1,j) * fh_prev(i+1,j)) + &
+                                        (G%mask2dT(i,j-1) * fh_prev(i,j-1) + &
+                                         G%mask2dT(i,j+1) * fh_prev(i,j+1))) &
+                                  + ((G%mask2dT(i-1,j-1) * fh_prev(i-1,j-1) + &
+                                      G%mask2dT(i+1,j+1) * fh_prev(i+1,j+1)) + &
+                                     (G%mask2dT(i-1,j+1) * fh_prev(i-1,j+1) + &
+                                      G%mask2dT(i+1,j-1) * fh_prev(i-1,j-1))) ))
+        endif !mask2dT
+      enddo ; enddo
+    enddo !s
+  endif !land_as_dry:else
 
 end subroutine smooth_x9_h
 
@@ -3339,10 +3489,12 @@ end subroutine smooth_x9_h
 !! Note that this subroutine does not conserve angular momentum, so don't use it
 !! in situations where you need conservation.  Also note that it assumes that the
 !! input fields have valid values in the first two halo points upon entry.
-subroutine smooth_x9_uv(G, field_u, field_v, zero_land)
+subroutine smooth_x9_uv(G, field_u, field_v, land_as_dry, zero_land)
   type(ocean_grid_type),             intent(in)    :: G         !< Ocean grid
   real, dimension(SZIB_(G),SZJ_(G)), intent(inout) :: field_u   !< u-point field to be smoothed [arbitrary]
   real, dimension(SZI_(G),SZJB_(G)), intent(inout) :: field_v   !< v-point field to be smoothed [arbitrary]
+  logical,                           intent(in)    :: land_as_dry  !< If true, land cells are treated
+                                                                !! as "dry" ocean cells.
   logical,                 optional, intent(in)    :: zero_land !< If present and false, return the average
                                                                 !! of the surrounding ocean points when
                                                                 !! smoothing, otherwise use a value of 0 for
@@ -3360,41 +3512,79 @@ subroutine smooth_x9_uv(G, field_u, field_v, zero_land)
 
   zero_land_val = .true. ; if (present(zero_land)) zero_land_val = zero_land
 
-  do s=1,0,-1
-    fu_prev(:,:) = field_u(:,:)
-    ! apply smoothing on field_u using the original non-rotationally symmetric expressions.
-    do j=js-s,je+s ; do I=Isq-s,Ieq+s ; if (G%mask2dCu(I,j) > 0.0) then
-      Iwts = 0.0625
-      if (.not. zero_land_val) &
-        Iwts = 1.0 / ( (4.0*G%mask2dCu(I,j) + &
-                        ( 2.0*((G%mask2dCu(I-1,j) + G%mask2dCu(I+1,j)) + &
-                               (G%mask2dCu(I,j-1) + G%mask2dCu(I,j+1))) + &
-                         ((G%mask2dCu(I-1,j-1) + G%mask2dCu(I+1,j+1)) + &
-                          (G%mask2dCu(I-1,j+1) + G%mask2dCu(I+1,j-1))) ) ) + 1.0e-16 )
-      field_u(I,j) = Iwts * ( 4.0*G%mask2dCu(I,j) * fu_prev(I,j) &
-                            + (2.0*((G%mask2dCu(I-1,j) * fu_prev(I-1,j) + G%mask2dCu(I+1,j) * fu_prev(I+1,j)) + &
-                                    (G%mask2dCu(I,j-1) * fu_prev(I,j-1) + G%mask2dCu(I,j+1) * fu_prev(I,j+1))) &
-                              + ((G%mask2dCu(I-1,j-1) * fu_prev(I-1,j-1) + G%mask2dCu(I+1,j+1) * fu_prev(I+1,j+1)) + &
-                                 (G%mask2dCu(I-1,j+1) * fu_prev(I-1,j+1) + G%mask2dCu(I+1,j-1) * fu_prev(I-1,j-1))) ))
-    endif ; enddo ; enddo
+  if (land_as_dry) then  !no mask2d
+    do s=1,0,-1
+      fu_prev(:,:) = field_u(:,:)
+      ! apply smoothing on field_u using the original non-rotationally symmetric expressions.
+      do j=js-s,je+s ; do I=Isq-s,Ieq+s
+        Iwts = 0.0625
+        field_u(I,j) = Iwts * (  4.0 * fu_prev(I,j) &
+                              + (2.0*((fu_prev(I-1,j) + fu_prev(I+1,j)) + &
+                                      (fu_prev(I,j-1) + fu_prev(I,j+1))) &
+                                + ((fu_prev(I-1,j-1) + fu_prev(I+1,j+1)) + &
+                                   (fu_prev(I-1,j+1) + fu_prev(I-1,j-1))) ) )
+      enddo ; enddo
 
-    fv_prev(:,:) = field_v(:,:)
-    ! apply smoothing on field_v using the original non-rotationally symmetric expressions.
-    do J=Jsq-s,Jeq+s ; do i=is-s,ie+s ; if (G%mask2dCv(i,J) > 0.0) then
-      Iwts = 0.0625
-      if (.not. zero_land_val) &
-        Iwts = 1.0 / ( (4.0*G%mask2dCv(i,J) + &
-                        ( 2.0*((G%mask2dCv(i-1,J) + G%mask2dCv(i+1,J)) + &
-                               (G%mask2dCv(i,J-1) + G%mask2dCv(i,J+1))) + &
-                         ((G%mask2dCv(i-1,J-1) + G%mask2dCv(i+1,J+1)) + &
-                          (G%mask2dCv(i-1,J+1) + G%mask2dCv(i+1,J-1))) ) ) + 1.0e-16 )
-      field_v(i,J) = Iwts * ( 4.0*G%mask2dCv(i,J) * fv_prev(i,J) &
-                            + (2.0*((G%mask2dCv(i-1,J) * fv_prev(i-1,J) + G%mask2dCv(i+1,J) * fv_prev(i+1,J)) + &
-                                    (G%mask2dCv(i,J-1) * fv_prev(i,J-1) + G%mask2dCv(i,J+1) * fv_prev(i,J+1))) &
-                              + ((G%mask2dCv(i-1,J-1) * fv_prev(i-1,J-1) + G%mask2dCv(i+1,J+1) * fv_prev(i+1,J+1)) + &
-                                 (G%mask2dCv(i-1,J+1) * fv_prev(i-1,J+1) + G%mask2dCv(i+1,J-1) * fv_prev(i-1,J-1))) ))
-    endif ; enddo ; enddo
-  enddo
+      fv_prev(:,:) = field_v(:,:)
+      ! apply smoothing on field_v using the original non-rotationally symmetric expressions.
+      do J=Jsq-s,Jeq+s ; do i=is-s,ie+s
+        Iwts = 0.0625
+        field_v(i,J) = Iwts * (  4.0 * fv_prev(i,J) &
+                              + (2.0*((fv_prev(i-1,J) + fv_prev(i+1,J)) + &
+                                      (fv_prev(i,J-1) + fv_prev(i,J+1))) &
+                                + ((fv_prev(i-1,J-1) + fv_prev(i+1,J+1)) + &
+                                   (fv_prev(i-1,J+1) + fv_prev(i-1,J-1))) ) )
+      enddo ; enddo
+    enddo !s
+  else !.not.land_as_dry
+    do s=1,0,-1
+      fu_prev(:,:) = field_u(:,:)
+      ! apply smoothing on field_u using the original non-rotationally symmetric expressions.
+      do j=js-s,je+s ; do I=Isq-s,Ieq+s
+        if (G%mask2dCu(I,j) > 0.0) then
+          Iwts = 0.0625
+          if (.not. zero_land_val) &
+            Iwts = 1.0 / ( (4.0*G%mask2dCu(I,j) + &
+                            ( 2.0*((G%mask2dCu(I-1,j) + G%mask2dCu(I+1,j)) + &
+                                   (G%mask2dCu(I,j-1) + G%mask2dCu(I,j+1))) + &
+                             ((G%mask2dCu(I-1,j-1) + G%mask2dCu(I+1,j+1)) + &
+                              (G%mask2dCu(I-1,j+1) + G%mask2dCu(I+1,j-1))) ) ) + 1.0e-16 )
+          field_u(I,j) = Iwts * ( 4.0*G%mask2dCu(I,j) * fu_prev(I,j) &
+                                + (2.0*((G%mask2dCu(I-1,j) * fu_prev(I-1,j) + &
+                                         G%mask2dCu(I+1,j) * fu_prev(I+1,j)) + &
+                                        (G%mask2dCu(I,j-1) * fu_prev(I,j-1) + &
+                                         G%mask2dCu(I,j+1) * fu_prev(I,j+1))) &
+                                  + ((G%mask2dCu(I-1,j-1) * fu_prev(I-1,j-1) + &
+                                      G%mask2dCu(I+1,j+1) * fu_prev(I+1,j+1)) + &
+                                     (G%mask2dCu(I-1,j+1) * fu_prev(I-1,j+1) + &
+                                      G%mask2dCu(I+1,j-1) * fu_prev(I-1,j-1))) ))
+        endif !mask
+      enddo ; enddo
+
+      fv_prev(:,:) = field_v(:,:)
+      ! apply smoothing on field_v using the original non-rotationally symmetric expressions.
+      do J=Jsq-s,Jeq+s ; do i=is-s,ie+s
+        if (G%mask2dCv(i,J) > 0.0) then
+          Iwts = 0.0625
+          if (.not. zero_land_val) &
+            Iwts = 1.0 / ( (4.0*G%mask2dCv(i,J) + &
+                            ( 2.0*((G%mask2dCv(i-1,J) + G%mask2dCv(i+1,J)) + &
+                                   (G%mask2dCv(i,J-1) + G%mask2dCv(i,J+1))) + &
+                             ((G%mask2dCv(i-1,J-1) + G%mask2dCv(i+1,J+1)) + &
+                              (G%mask2dCv(i-1,J+1) + G%mask2dCv(i+1,J-1))) ) ) + 1.0e-16 )
+          field_v(i,J) = Iwts * ( 4.0*G%mask2dCv(i,J) * fv_prev(i,J) &
+                                + (2.0*((G%mask2dCv(i-1,J) * fv_prev(i-1,J) + &
+                                         G%mask2dCv(i+1,J) * fv_prev(i+1,J)) + &
+                                        (G%mask2dCv(i,J-1) * fv_prev(i,J-1) + &
+                                         G%mask2dCv(i,J+1) * fv_prev(i,J+1))) &
+                                  + ((G%mask2dCv(i-1,J-1) * fv_prev(i-1,J-1) + &
+                                      G%mask2dCv(i+1,J+1) * fv_prev(i+1,J+1)) + &
+                                     (G%mask2dCv(i-1,J+1) * fv_prev(i-1,J+1) + &
+                                      G%mask2dCv(i+1,J-1) * fv_prev(i-1,J-1))) ))
+        endif !mask
+      enddo ; enddo
+    enddo !s
+  endif !land_as_dry:else
 
 end subroutine smooth_x9_uv
 
@@ -3619,6 +3809,10 @@ end subroutine hor_visc_end
 !! \f]
 !! These boundary conditions are largely dictated by the use of an Arakawa
 !! C-grid and by the varying layer thickness.
+!!
+!! As an alternative to free or no slip, land can be treated as dry ocean,
+!! i.e. as cells with zero thickness and zero velocity.  With this approach
+!! there are no momentum land/sea boundary conditions.
 !!
 !! \subsection section_anisotropic_viscosity Anisotropic viscosity
 !!

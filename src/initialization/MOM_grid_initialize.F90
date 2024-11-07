@@ -1171,12 +1171,13 @@ end function Adcroft_reciprocal
 
 !> Initializes the grid masks and any metrics that come with masks already applied.
 !!
-!!    Initialize_masks sets mask2dT, mask2dCu, mask2dCv, and mask2dBu to mask out
-!! flow over any points which are shallower than Dmask and permit an
+!!    Initialize_masks sets mask2dT, mask2dU, mask2dV, mask2dCu, mask2dCv, and mask2dBu
+!! to mask out flow over any points which are shallower than Dmask and permit an
 !! appropriate treatment of the boundary conditions.  mask2dCu and mask2dCv
 !! are 0.0 at any points adjacent to a land point.  mask2dBu is 0.0 at
-!! any land or boundary point.  For points in the interior, mask2dCu,
-!! mask2dCv, and mask2dBu are all 1.0.
+!! any land or boundary point.  mask2dU and mask2dV are 0.0 in the land interior.
+!! For points in the ocean interior,mask2dU, mask2dCu, mask2dV, mask2dCv, and
+!! mask2dBu are all 1.0.
 subroutine initialize_masks(G, PF, US)
   type(dyn_horgrid_type), intent(inout) :: G  !< The dynamic horizontal grid type
   type(param_file_type),  intent(in)    :: PF !< Parameter file structure
@@ -1206,6 +1207,7 @@ subroutine initialize_masks(G, PF, US)
   if (mask_depth == -9999.0*US%m_to_Z) Dmask = min_depth
 
   G%mask2dCu(:,:) = 0.0 ; G%mask2dCv(:,:) = 0.0 ; G%mask2dBu(:,:) = 0.0
+  G%mask2dU(:,:) = 0.0 ; G%mask2dV(:,:) = 0.0
 
   ! Construct the h-point or T-point mask
   do j=G%jsd,G%jed ; do i=G%isd,G%ied
@@ -1222,6 +1224,11 @@ subroutine initialize_masks(G, PF, US)
     else
       G%mask2dCu(I,j) = 1.0
     endif
+    if ((G%bathyT(i,j) <= Dmask) .and. (G%bathyT(i+1,j) <= Dmask)) then
+      G%mask2dU(I,j) = 0.0
+    else
+      G%mask2dU(I,j) = 1.0
+    endif
     ! This mask may be revised later after the open boundary positions are specified.
     G%OBCmaskCu(I,j) = G%mask2dCu(I,j)
   enddo ; enddo
@@ -1231,6 +1238,11 @@ subroutine initialize_masks(G, PF, US)
       G%mask2dCv(i,J) = 0.0
     else
       G%mask2dCv(i,J) = 1.0
+    endif
+    if ((G%bathyT(i,j) <= Dmask) .and. (G%bathyT(i,j+1) <= Dmask)) then
+      G%mask2dV(i,J) = 0.0
+    else
+      G%mask2dV(i,J) = 1.0
     endif
     ! This mask may be revised later after the open boundary positions are specified.
     G%OBCmaskCv(i,J) = G%mask2dCv(i,J)
@@ -1247,6 +1259,7 @@ subroutine initialize_masks(G, PF, US)
 
   call pass_var(G%mask2dBu, G%Domain, position=CORNER)
   call pass_vector(G%mask2dCu, G%mask2dCv, G%Domain, To_All+Scalar_Pair, CGRID_NE)
+  call pass_vector(G%mask2dU, G%mask2dV, G%Domain, To_All+Scalar_Pair, CGRID_NE)
 
   do j=G%jsd,G%jed ; do I=G%IsdB,G%IedB
     ! This open face length may be revised later.

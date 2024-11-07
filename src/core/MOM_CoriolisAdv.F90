@@ -54,6 +54,10 @@ type, public :: CoriolisAdv_CS ; private
   real    :: wt_lin_blend    !< A weighting value beyond which the blending between
                              !! Sadourny and Arakawa & Hsu goes linearly to 0 [nondim].
                              !! This must be between 1 and 1e-15, often 1/8.
+  logical :: land_as_dry     !< If true, land cells are treated as "dry" ocean cells.
+                             !! In other words cells with zero thickness and
+                             !! zero velocity.  With this approach there are
+                             !! no momentum land/sea boundary conditions.
   logical :: no_slip         !< If true, no slip boundary conditions are used.
                              !! Otherwise free slip boundary conditions are assumed.
                              !! The implementation of the free slip boundary
@@ -73,6 +77,10 @@ type, public :: CoriolisAdv_CS ; private
                              !! relative to the other one is used.  This is only
                              !! available at present if Coriolis scheme is
                              !! SADOURNY75_ENERGY.
+  logical :: Coriolis_dry_as_land !< If CORIOLIS_DRY_AS_LAND is defined, the inverse q-grid
+                             !! thickness is calculated via hArea/hhArea rather than via Area/hArea.
+                             !! This treats dry ocean like land by favoring thicker adjacent edges.
+
   type(time_type), pointer :: Time !< A pointer to the ocean model's clock.
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the timing of diagnostic output.
   !>@{ Diagnostic IDs
@@ -125,12 +133,12 @@ contains
 subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Waves)
   type(ocean_grid_type),                      intent(in)    :: G  !< Ocean grid structure
   type(verticalGrid_type),                    intent(in)    :: GV !< Vertical grid structure
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(in)    :: u  !< Zonal velocity [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(in)    :: v  !< Meridional velocity [L T-1 ~> m s-1]
-  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(in)    :: h  !< Layer thickness [H ~> m or kg m-2]
-  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(in)    :: uh !< Zonal transport u*h*dy
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(inout) :: u  !< Zonal velocity [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(inout) :: v  !< Meridional velocity [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: h  !< Layer thickness [H ~> m or kg m-2]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(inout) :: uh !< Zonal transport u*h*dy
                                                                   !! [H L2 T-1 ~> m3 s-1 or kg s-1]
-  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(in)    :: vh !< Meridional transport v*h*dx
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(inout) :: vh !< Meridional transport v*h*dx
                                                                   !! [H L2 T-1 ~> m3 s-1 or kg s-1]
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(out)   :: CAu !< Zonal acceleration due to Coriolis
                                                                   !! and momentum advection [L T-2 ~> m s-2].
@@ -163,12 +171,16 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   real, dimension(SZIB_(G),SZJ_(G)) :: &
     hArea_u, &  ! The cell area weighted thickness interpolated to u points
                 ! times the effective areas [H L2 ~> m3 or kg].
+    hhArea_u, & ! The cell area weighted thickness squared interpolated to u points
+                ! times the effective areas [H2 L2 ~> m4 or m kg].
     KEx, &      ! The zonal gradient of Kinetic energy per unit mass [L T-2 ~> m s-2],
                 ! KEx = d/dx KE.
     uh_center   ! Transport based on arithmetic mean h at u-points [H L2 T-1 ~> m3 s-1 or kg s-1]
   real, dimension(SZI_(G),SZJB_(G)) :: &
     hArea_v, &  ! The cell area weighted thickness interpolated to v points
                 ! times the effective areas [H L2 ~> m3 or kg].
+    hhArea_v, & ! The cell area weighted thickness squared interpolated to v points
+                ! times the effective areas [H2 L2 ~> m4 or m kg].
     KEy, &      ! The meridional gradient of Kinetic energy per unit mass [L T-2 ~> m s-2],
                 ! KEy = d/dy KE.
     vh_center   ! Transport based on arithmetic mean h at v-points [H L2 T-1 ~> m3 s-1 or kg s-1]
@@ -201,6 +213,8 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   real :: max_Ihq, min_Ihq       ! The maximum and minimum of the nearby Ihq [H-1 ~> m-1 or m2 kg-1].
   real :: hArea_q                ! The sum of area times thickness of the cells
                                  ! surrounding a q point [H L2 ~> m3 or kg].
+  real :: hhArea_q               ! The sum of area times thickness squared of the cells
+                                 ! surrounding a q point, [H2 L2 ~> m4 or m kg].
   real :: vol_neglect            ! A volume so small that is expected to be
                                  ! lost in roundoff [H L2 ~> m3 or kg].
   real :: temp1, temp2           ! Temporary variables [L2 T-2 ~> m2 s-2].
@@ -243,9 +257,15 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   h_tiny = GV%Angstrom_H  ! Perhaps this should be set to h_neglect instead.
 
   !$OMP parallel do default(private) shared(Isq,Ieq,Jsq,Jeq,G,Area_h)
-  do j=Jsq-1,Jeq+2 ; do I=Isq-1,Ieq+2
-    Area_h(i,j) = G%mask2dT(i,j) * G%areaT(i,j)
-  enddo ; enddo
+  if (CS%land_as_dry) then  !no mask2d
+    do j=Jsq-1,Jeq+2 ; do I=Isq-1,Ieq+2
+      Area_h(i,j) = G%areaT(i,j)
+    enddo ; enddo
+  else
+    do j=Jsq-1,Jeq+2 ; do I=Isq-1,Ieq+2
+      Area_h(i,j) = G%mask2dT(i,j) * G%areaT(i,j)
+    enddo ; enddo
+  endif !and_as_dry:else
   if (associated(OBC)) then ; do n=1,OBC%number_of_segments
     if (.not. OBC%segment(n)%on_pe) cycle
     I = OBC%segment(n)%HI%IsdB ; J = OBC%segment(n)%HI%JsdB
@@ -283,11 +303,28 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   !$OMP                        pbv, Stokes_VF)
   do k=1,nz
 
+    if (CS%land_as_dry) then
+      ! mask the full array extents to make sure we have covered all loops
+      ! arrays are marked inout because of this masking, otherwise unchanged
+      do j=G%jsd,G%jed ; do i=G%isd,G%ied
+         h(i,j,k) = G%mask2dT(i,j) *  h(i,j,k)
+      enddo; enddo
+      do j=G%jsd,G%jed ; do I=G%IsdB,G%IedB
+         u(I,j,k) = G%mask2dU(I,j) *  u(I,j,k)
+        uh(I,j,k) = G%mask2dU(I,j) * uh(I,j,k)
+      enddo; enddo
+      do J=G%JsdB,G%JedB ; do i=G%isd,G%ied
+         v(i,J,k) = G%mask2dV(i,J) *  v(i,J,k)
+        vh(i,J,k) = G%mask2dV(i,J) * vh(i,J,k)
+      enddo; enddo
+    endif !land_as_dry
+
     ! Here the second order accurate layer potential vorticities, q,
     ! are calculated.  hq is  second order accurate in space.  Relative
     ! vorticity is second order accurate everywhere with free slip b.c.s,
     ! but only first order accurate at boundaries with no slip b.c.s.
     ! First calculate the contributions to the circulation around the q-point.
+
     if (Stokes_VF) then
       if (CS%id_CAuS>0 .or. CS%id_CAvS>0) then
         do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
@@ -317,11 +354,21 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
       enddo; enddo
     endif
     do J=Jsq-1,Jeq+1 ; do i=Isq-1,Ieq+2
-      hArea_v(i,J) = 0.5*((Area_h(i,j) * h(i,j,k)) + (Area_h(i,j+1) * h(i,j+1,k)))
+      hArea_v(i,J) = 0.5*(Area_h(i,j) * h(i,j,k) + Area_h(i,j+1) * h(i,j+1,k))
     enddo ; enddo
     do j=Jsq-1,Jeq+2 ; do I=Isq-1,Ieq+1
-      hArea_u(I,j) = 0.5*((Area_h(i,j) * h(i,j,k)) + (Area_h(i+1,j) * h(i+1,j,k)))
+      hArea_u(I,j) = 0.5*(Area_h(i,j) * h(i,j,k) + Area_h(i+1,j) * h(i+1,j,k))
     enddo ; enddo
+    if (CS%Coriolis_dry_as_land) then
+      do J=Jsq-1,Jeq+1 ; do i=Isq-1,Ieq+2
+        hhArea_v(i,J) = 0.5*((Area_h(i,j  ) * h(i,j,  k)) * h(i,j,  k) + &
+                             (Area_h(i,j+1) * h(i,j+1,k)) * h(i,j+1,k)   )
+      enddo ; enddo
+      do j=Jsq-1,Jeq+2 ; do I=Isq-1,Ieq+1
+        hhArea_u(I,j) = 0.5*( (Area_h(i,  j) * h(i,  j,k)) * h(i,  j,k) + &
+                              (Area_h(i+1,j) * h(i+1,j,k)) * h(i+1,j,k)   )
+      enddo ; enddo
+    endif !Coriolis_dry_as_land
 
     if (CS%Coriolis_En_Dis) then
       do j=Jsq,Jeq+1 ; do I=is-1,ie
@@ -363,8 +410,14 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         do i = max(Isq-1,OBC%segment(n)%HI%isd), min(Ieq+2,OBC%segment(n)%HI%ied)
           if (OBC%segment(n)%direction == OBC_DIRECTION_N) then
             hArea_v(i,J) = 0.5 * (Area_h(i,j) + Area_h(i,j+1)) * h(i,j,k)
+            if (CS%Coriolis_dry_as_land) then
+              hhArea_v(i,J) = hArea_v(i,J) * h(i,j,k)
+            endif
           else ! (OBC%segment(n)%direction == OBC_DIRECTION_S)
             hArea_v(i,J) = 0.5 * (Area_h(i,j) + Area_h(i,j+1)) * h(i,j+1,k)
+            if (CS%Coriolis_dry_as_land) then
+              hhArea_v(i,J) = hArea_v(i,J) * h(i,j+1,k)
+            endif
           endif
         enddo
 
@@ -403,8 +456,14 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         do j = max(Jsq-1,OBC%segment(n)%HI%jsd), min(Jeq+2,OBC%segment(n)%HI%jed)
           if (OBC%segment(n)%direction == OBC_DIRECTION_E) then
             hArea_u(I,j) = 0.5*(Area_h(i,j) + Area_h(i+1,j)) * h(i,j,k)
+            if (CS%Coriolis_dry_as_land) then
+              hhArea_u(I,j) = hArea_u(I,j) * h(i,j,k)
+            endif
           else ! (OBC%segment(n)%direction == OBC_DIRECTION_W)
             hArea_u(I,j) = 0.5*(Area_h(i,j) + Area_h(i+1,j)) * h(i+1,j,k)
+            if (CS%Coriolis_dry_as_land) then
+              hhArea_u(I,j) = hArea_u(I,j) * h(i+1,j,k)
+            endif
           endif
         enddo
         if (CS%Coriolis_En_Dis) then
@@ -430,12 +489,30 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
             if (Area_h(i,j) + Area_h(i+1,j) > 0.0) then
               hArea_u(I,j+1) = hArea_u(I,j) * ((Area_h(i,j+1) + Area_h(i+1,j+1)) / &
                                                (Area_h(i,j) + Area_h(i+1,j)))
-            else ; hArea_u(I,j+1) = 0.0 ; endif
+              if (CS%Coriolis_dry_as_land) then
+                hhArea_u(I,j+1) = hhArea_u(I,j) * ((Area_h(i,j+1) + Area_h(i+1,j+1)) / &
+                                                   (Area_h(i,j) + Area_h(i+1,j)))
+              endif
+            else
+              hArea_u(I,j+1) = 0.0
+              if (CS%Coriolis_dry_as_land) then
+                hhArea_u(I,j+1) = 0.0
+              endif
+            endif
           else ! (OBC%segment(n)%direction == OBC_DIRECTION_S)
             if (Area_h(i,j+1) + Area_h(i+1,j+1) > 0.0) then
               hArea_u(I,j) = hArea_u(I,j+1) * ((Area_h(i,j) + Area_h(i+1,j)) / &
                                                (Area_h(i,j+1) + Area_h(i+1,j+1)))
-            else ; hArea_u(I,j) = 0.0 ; endif
+             if (CS%Coriolis_dry_as_land) then
+                hhArea_u(I,j) = hhArea_u(I,j+1) * ((Area_h(i,j) + Area_h(i+1,j)) / &
+                                                   (Area_h(i,j+1) + Area_h(i+1,j+1)))
+              endif
+            else
+              hArea_u(I,j) = 0.0
+              if (CS%Coriolis_dry_as_land) then
+                hhArea_u(I,j) = 0.0
+              endif
+            endif
           endif
         enddo
       elseif (OBC%segment(n)%is_E_or_W .and. (I >= Isq-1) .and. (I <= Ieq+1)) then
@@ -444,19 +521,48 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
             if (Area_h(i,j) + Area_h(i,j+1) > 0.0) then
               hArea_v(i+1,J) = hArea_v(i,J) * ((Area_h(i+1,j) + Area_h(i+1,j+1)) / &
                                                (Area_h(i,j) + Area_h(i,j+1)))
-            else ; hArea_v(i+1,J) = 0.0 ; endif
+              if (CS%Coriolis_dry_as_land) then
+                hhArea_v(i+1,J) = hhArea_v(i,J) * ((Area_h(i+1,j) + Area_h(i+1,j+1)) / &
+                                                   (Area_h(i,j) + Area_h(i,j+1)))
+              endif
+            else
+              hArea_v(i+1,J) = 0.0
+              if (CS%Coriolis_dry_as_land) then
+                hhArea_v(i+1,J) = 0.0
+              endif
+            endif
           else ! (OBC%segment(n)%direction == OBC_DIRECTION_W)
             hArea_v(i,J) = 0.5 * (Area_h(i,j) + Area_h(i,j+1)) * h(i,j+1,k)
             if (Area_h(i+1,j) + Area_h(i+1,j+1) > 0.0) then
               hArea_v(i,J) = hArea_v(i+1,J) * ((Area_h(i,j) + Area_h(i,j+1)) / &
                                                (Area_h(i+1,j) + Area_h(i+1,j+1)))
-            else ; hArea_v(i,J) = 0.0 ; endif
+              if (CS%Coriolis_dry_as_land) then
+                hhArea_v(i,J) = hhArea_v(i+1,J) * ((Area_h(i,j) + Area_h(i,j+1)) / &
+                                                   (Area_h(i+1,j) + Area_h(i+1,j+1)))
+              endif
+            else
+              hArea_v(i,J) = 0.0
+              if (CS%Coriolis_dry_as_land) then
+                hhArea_v(i,J) = 0.0
+              endif
+            endif
           endif
         enddo
       endif
     enddo ; endif
 
-    if (CS%no_slip) then
+    if (CS%land_as_dry) then  !no mask2d
+      do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+        rel_vort(I,J) = (dvdx(I,J) - dudy(I,J)) * G%IareaBu(I,J)
+      enddo; enddo
+      if (Stokes_VF) then
+        if (CS%id_CAuS>0 .or. CS%id_CAvS>0) then
+          do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+            stk_vort(I,J) = (dvSdx(I,J) - duSdy(I,J)) * G%IareaBu(I,J)
+          enddo; enddo
+        endif
+      endif
+    elseif (CS%no_slip) then
       do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
         rel_vort(I,J) = (2.0 - G%mask2dBu(I,J)) * (dvdx(I,J) - dudy(I,J)) * G%IareaBu(I,J)
       enddo; enddo
@@ -467,28 +573,40 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
           enddo; enddo
         endif
       endif
-    else
+    else !free slip
       do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
         rel_vort(I,J) = G%mask2dBu(I,J) * (dvdx(I,J) - dudy(I,J)) * G%IareaBu(I,J)
       enddo; enddo
       if (Stokes_VF) then
         if (CS%id_CAuS>0 .or. CS%id_CAvS>0) then
           do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+            ! by inspection, this is wrong:
             stk_vort(I,J) = (2.0 - G%mask2dBu(I,J)) * (dvSdx(I,J) - duSdy(I,J)) * G%IareaBu(I,J)
+            ! it should be:
+!!!!!!!!!!! stk_vort(I,J) = G%mask2dBu(I,J) * (dvSdx(I,J) - duSdy(I,J)) * G%IareaBu(I,J)
           enddo; enddo
         endif
       endif
-    endif
+    endif !land_as_dry:no_slip:else
 
     do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
       abs_vort(I,J) = G%CoriolisBu(I,J) + rel_vort(I,J)
     enddo ; enddo
 
-    do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
-      hArea_q = (hArea_u(I,j) + hArea_u(I,j+1)) + (hArea_v(i,J) + hArea_v(i+1,J))
-      Ih_q(I,J) = Area_q(I,J) / (hArea_q + vol_neglect)
-      q(I,J) = abs_vort(I,J) * Ih_q(I,J)
-    enddo; enddo
+    if (CS%Coriolis_dry_as_land) then
+      do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+         hArea_q = ( hArea_u(I,j) +  hArea_u(I,j+1)) + ( hArea_v(i,J) +  hArea_v(i+1,J))
+        hhArea_q = (hhArea_u(I,j) + hhArea_u(I,j+1)) + (hhArea_v(i,J) + hhArea_v(i+1,J))
+        Ih_q(I,J) = hArea_q / (hhArea_q + h_tiny*vol_neglect)
+        q(I,J) = abs_vort(I,J) * Ih_q(I,J)
+      enddo; enddo
+    else !not as_land
+      do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
+        hArea_q = (hArea_u(I,j) + hArea_u(I,j+1)) + (hArea_v(i,J) + hArea_v(i+1,J))
+        Ih_q(I,J) = Area_q(I,J) / (hArea_q + vol_neglect)
+        q(I,J) = abs_vort(I,J) * Ih_q(I,J)
+      enddo; enddo
+    endif !Coriolis_dry_as_land:else
 
     if (Stokes_VF) then
       if (CS%id_CAuS>0 .or. CS%id_CAvS>0) then
@@ -1083,7 +1201,17 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
                  "cleaner than the no slip BCs. The use of free slip BCs "//&
                  "is strongly encouraged, and no slip BCs are not used with "//&
                  "the biharmonic viscosity.", default=.false.)
-
+  call get_param(param_file, mdl, "LAND_AS_DRY", CS%land_as_dry, &
+                 "If true, land cells are treated as dry ocean cells. "//&
+                 "In other words cells with zero thickness and zero velocity. "//&
+                 "With this approach there are no momentum land/sea boundary conditions.", &
+                 default=.false.)
+  if (CS%no_slip .and. CS%land_as_dry) &
+    call MOM_error(FATAL,"ERROR: NOSLIP and DRY_LAND cannot be defined at the same time.")
+  call get_param(param_file, mdl, "CORIOLIS_DRY_AS_LAND", CS%Coriolis_dry_as_land, &
+                 "If true, the inverse q-grid thickness is calculated via hArea/hhArea "//&
+                 "rather than via Area/hArea. This treats dry ocean like land by "//&
+                 "favoring thicker adjacent edges.", default=.false.)
   call get_param(param_file, mdl, "CORIOLIS_EN_DIS", CS%Coriolis_En_Dis, &
                  "If true, two estimates of the thickness fluxes are used "//&
                  "to estimate the Coriolis term, and the one that "//&
@@ -1116,12 +1244,15 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
       CS%Coriolis_Scheme = AL_BLEND
     case (ROBUST_ENSTRO_STRING)
       CS%Coriolis_Scheme = ROBUST_ENSTRO
-      CS%Coriolis_En_Dis = .false.
     case default
       call MOM_mesg('CoriolisAdv_init: Coriolis_Scheme ="'//trim(tmpstr)//'"', 0)
       call MOM_error(FATAL, "CoriolisAdv_init: Unrecognized setting "// &
             "#define CORIOLIS_SCHEME "//trim(tmpstr)//" found in input file.")
   end select
+  if (.not. CS%Coriolis_Scheme == SADOURNY75_ENERGY .and. CS%Coriolis_En_Dis) &
+    call MOM_error(FATAL, &
+      "ERROR: CORIOLIS_EN_DIS only works for SADOURNY75_ENERGY.")
+
   if (CS%Coriolis_Scheme == AL_BLEND) then
     call get_param(param_file, mdl, "CORIOLIS_BLEND_WT_LIN", CS%wt_lin_blend, &
                  "A weighting value for the ratio of inverse thicknesses, "//&
@@ -1141,22 +1272,18 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
            "CORIOLIS_BLEND_F_EFF_MAX should be at least 2.")
   endif
 
-  mesg = "If true, the Coriolis terms at u-points are bounded by "//&
-         "the four estimates of (f+rv)v from the four neighboring "//&
-         "v-points, and similarly at v-points."
-  if (CS%Coriolis_En_Dis .and. (CS%Coriolis_Scheme == SADOURNY75_ENERGY)) then
-    mesg = trim(mesg)//"  This option is "//&
-                 "always effectively false with CORIOLIS_EN_DIS defined and "//&
-                 "CORIOLIS_SCHEME set to "//trim(SADOURNY75_ENERGY_STRING)//"."
-  else
-    mesg = trim(mesg)//"  This option would "//&
+  call get_param(param_file, mdl, "BOUND_CORIOLIS", CS%bound_Coriolis, &
+                 "If true, the Coriolis terms at u-points are bounded by "//&
+                 "the four estimates of (f+rv)v from the four neighboring "//&
+                 "v-points, and similarly at v-points.  "//&
+                 "This option would "//&
                  "have no effect on the SADOURNY Coriolis scheme if it "//&
-                 "were possible to use centered difference thickness fluxes."
-  endif
-  call get_param(param_file, mdl, "BOUND_CORIOLIS", CS%bound_Coriolis, mesg, &
+                 "were possible to use centered difference thickness fluxes.", &
                  default=.false.)
-  if ((CS%Coriolis_En_Dis .and. (CS%Coriolis_Scheme == SADOURNY75_ENERGY)) .or. &
-      (CS%Coriolis_Scheme == ROBUST_ENSTRO)) CS%bound_Coriolis = .false.
+  if (CS%bound_Coriolis .and. CS%Coriolis_En_Dis) &
+    call MOM_error(FATAL, &
+      "ERROR: BOUND_CORIOLIS & CORIOLIS_EN_DIS cannot be defined at the same time. "//&
+      "Note that BOUND_CORIOLIS is the default for BOUND_CORIOLIS_BIHARM.")
 
   ! Set KE_Scheme (selects discretization of KE)
   call get_param(param_file, mdl, "KE_SCHEME", tmpstr, &
