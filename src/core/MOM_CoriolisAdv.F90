@@ -547,6 +547,11 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 !      vol_neglect = ((G%areaT(i,j) + G%areaT(i+1,j+1)) + &
 !                    (G%areaT(i+1,j) + G%areaT(i,j+1))) * GV%H_subroundoff
       Ih_q(I,J) = Area_q(I,J) / (hArea_q + vol_neglect)
+!      Ih_q(I,J) = ((G%mask2dT(i,j)   + G%mask2dT(i+1,j+1)) + &
+!                   (G%mask2dT(i,j+1) + G%mask2dT(i+1,j))) / &
+!                   ((h(i,j,k) * G%mask2dT(i,j)     + h(i+1,j+1,k) * G%mask2dT(i+1,j+1) ) + &
+!                    (h(i,j+1,k) * G%mask2dT(i,j+1) + h(i+1,j,k) * G%mask2dT(i+1,j) ) + &
+!                    GV%H_subroundoff )
       q(I,J) = abs_vort(I,J) * Ih_q(I,J)
     enddo; enddo
 
@@ -1387,10 +1392,12 @@ subroutine UP3_Superbee_limiter_reconstruction(q1,q2,q3,q4,u,qr)
   if (u>0.) then
     theta = (q2 - q1)/(q3 - q2 + 1e-20)
     psi = max(0., min(1., 2.*theta), min(2., theta)) ! Superbee limiter
+!    psi = max(0., min(2., 1./3 + 2./3 * theta), 2.*theta)
     qr = q2 + 0.5*psi*(q3 - q2)
   else
     theta = (q4 - q3)/(q3 - q2 + 1e-20)
     psi = max(0., min(1., 2.*theta), min(2., theta))
+!    psi = max(0., min(2., 1./3 + 2./3 * theta), 2.*theta)
     qr = q3 + 0.5*psi*(q2 - q3)
   endif
 
