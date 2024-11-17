@@ -28,9 +28,8 @@ public CorAdCalc, CoriolisAdv_init, CoriolisAdv_end
 #include <MOM_memory.h>
 
 !> Control structure for mom_coriolisadv
-type, public :: CoriolisAdv_CS ; private
-  logical :: initialized = .false. !< True if this control structure has been initialized.
-  integer :: Coriolis_Scheme !< Selects the discretization for the Coriolis terms.
+type, public :: CoriolisAdv_CS ; private 
+  integer, public :: Coriolis_Scheme !< Selects the discretization for the Coriolis terms.
                              !! Valid values are:
                              !! - SADOURNY75_ENERGY - Sadourny, 1975
                              !! - ARAKAWA_HSU90     - Arakawa & Hsu, 1990, Energy & non-div. Enstrophy
@@ -40,10 +39,12 @@ type, public :: CoriolisAdv_CS ; private
                              !! - ARAKAWA_LAMB_BLEND - A blend of Arakawa & Lamb with Arakawa & Hsu and Sadourny energy.
                              !! The default, SADOURNY75_ENERGY, is the safest choice then the
                              !! deformation radius is poorly resolved.
+  integer, public :: WENO7th_ENSTRO_val  !< Value for WENOVI_7TH_ENSTRO scheme
+  logical :: initialized = .false. !< True if this control structure has been initialized.
   integer :: KE_Scheme       !< KE_SCHEME selects the discretization for
                              !! the kinetic energy. Valid values are:
                              !!  KE_ARAKAWA, KE_SIMPLE_GUDONOV, KE_GUDONOV
-  integer :: UP3_limiter     !! UP3 scheme selects the flux limiter. Valid values are: NONE, KOREN, SUPERBEE
+  integer :: UP3_limiter     !< UP3 scheme selects the flux limiter. Valid values are: NONE, KOREN, SUPERBEE
   integer :: PV_Adv_Scheme   !< PV_ADV_SCHEME selects the discretization for PV advection
                              !! Valid values are:
                              !! - PV_ADV_CENTERED - centered (aka Sadourny, 75)
@@ -286,6 +287,13 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   h_tiny = GV%Angstrom_H  ! Perhaps this should be set to h_neglect instead.
 
 
+  if (CS%Coriolis_Scheme == wenovi_7th_ENSTRO .or. &
+      CS%Coriolis_Scheme == wenovi_7th_split) then
+    Isq = Isq - 3
+    Ieq = Ieq + 2
+    Jsq = Jsq - 3
+    Jeq = Jeq + 2
+  endif  
   !$OMP parallel do default(private) shared(Isq,Ieq,Jsq,Jeq,G,Area_h)
   do j=Jsq-1,Jeq+2 ; do I=Isq-1,Ieq+2
     Area_h(i,j) = G%mask2dT(i,j) * G%areaT(i,j)
@@ -317,6 +325,14 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
                   (Area_h(i+1,j) + Area_h(i,j+1))
   enddo ; enddo
 
+  if (CS%Coriolis_Scheme == wenovi_7th_ENSTRO .or. &
+        CS%Coriolis_Scheme == wenovi_7th_split) then
+    Isq = Isq + 3
+    Ieq = Ieq - 2
+    Jsq = Jsq + 3
+    Jeq = Jeq - 2
+  endif
+
   Stokes_VF = .false.
   if (present(Waves)) then ; if (associated(Waves)) then
     Stokes_VF = Waves%Stokes_VF
@@ -328,13 +344,13 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   do k=1,nz
 
     
-!    if (CS%Coriolis_Scheme == wenovi_7th_ENSTRO .or. &
-!        CS%Coriolis_Scheme == wenovi_7th_split) then
-!      Isq = Isq - 5
-!      Ieq = Ieq + 5
-!      Jsq = Jsq - 5
-!      Jeq = Jeq + 5
-!    endif
+    if (CS%Coriolis_Scheme == wenovi_7th_ENSTRO .or. &
+        CS%Coriolis_Scheme == wenovi_7th_split) then
+      Isq = Isq - 3
+      Ieq = Ieq + 2
+      Jsq = Jsq - 3
+      Jeq = Jeq + 2
+    endif
     ! Here the second order accurate layer potential vorticities, q,
     ! are calculated.  hq is  second order accurate in space.  Relative
     ! vorticity is second order accurate everywhere with free slip b.c.s,
@@ -563,13 +579,13 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
       endif
     endif
 
-!    if (CS%Coriolis_Scheme == wenovi_7th_ENSTRO .or. &
-!        CS%Coriolis_Scheme == wenovi_7th_split) then
-!      Isq = Isq + 5
-!      Ieq = Ieq - 5
-!      Jsq = Jsq + 5
-!      Jeq = Jeq - 5
-!    endif
+    if (CS%Coriolis_Scheme == wenovi_7th_ENSTRO .or. &
+        CS%Coriolis_Scheme == wenovi_7th_split) then
+      Isq = Isq + 3
+      Ieq = Ieq - 2
+      Jsq = Jsq + 3
+      Jeq = Jeq - 2
+    endif
 
     if (CS%id_rv > 0) then
       do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
@@ -2109,6 +2125,9 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
       call MOM_error(FATAL, "CoriolisAdv_init: Unrecognized setting "// &
             "#define CORIOLIS_SCHEME "//trim(tmpstr)//" found in input file.")
   end select
+  ! Record the values for WENO schemes
+  CS%WENO7th_ENSTRO_val = wenovi_7th_ENSTRO
+
   if (CS%Coriolis_Scheme == wenovi_7th_ENSTRO .or. &
       CS%Coriolis_Scheme == wenovi_7th_split .or. &
       CS%Coriolis_Scheme == wenovi_5th_ENSTRO) then

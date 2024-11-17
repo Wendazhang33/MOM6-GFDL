@@ -474,14 +474,23 @@ subroutine step_MOM_dyn_split_RK2(u_inst, v_inst, h, tv, visc, Time_local, dt, f
   call create_group_pass(CS%pass_visc_rem, CS%visc_rem_u, CS%visc_rem_v, G%Domain, &
                          To_All+SCALAR_PAIR, CGRID_NE, halo=max(1,cont_stencil))
   call create_group_pass(CS%pass_uvp, up, vp, G%Domain, halo=max(1,cont_stencil))
-  call create_group_pass(CS%pass_hp_uv, hp, G%Domain, halo=2)
-  call create_group_pass(CS%pass_hp_uv, u_av, v_av, G%Domain, halo=max(2,obc_stencil))
-  call create_group_pass(CS%pass_hp_uv, uh(:,:,:), vh(:,:,:), G%Domain, halo=max(2,obc_stencil))
-
   call create_group_pass(CS%pass_uv, u_inst, v_inst, G%Domain, halo=max(2,cont_stencil))
-  call create_group_pass(CS%pass_h, h, G%Domain, halo=max(2,cont_stencil))
-  call create_group_pass(CS%pass_av_uvh, u_av, v_av, G%Domain, halo=max(2,obc_stencil))
-  call create_group_pass(CS%pass_av_uvh, uh(:,:,:), vh(:,:,:), G%Domain, halo=max(2,obc_stencil))
+
+  if (CS%CoriolisAdv%Coriolis_Scheme == CS%CoriolisAdv%WENO7th_ENSTRO_val) then
+    call create_group_pass(CS%pass_hp_uv, hp, G%Domain, halo=4)
+    call create_group_pass(CS%pass_hp_uv, u_av, v_av, G%Domain, halo=max(4,obc_stencil))
+    call create_group_pass(CS%pass_hp_uv, uh(:,:,:), vh(:,:,:), G%Domain, halo=max(4,obc_stencil))
+    call create_group_pass(cs%pass_h, h, g%domain, halo=max(4,cont_stencil))
+    call create_group_pass(cs%pass_av_uvh, u_av, v_av, g%domain, halo=max(4,obc_stencil))
+    call create_group_pass(CS%pass_av_uvh, uh(:,:,:), vh(:,:,:), G%Domain, halo=max(4,obc_stencil))
+  else
+    call create_group_pass(CS%pass_hp_uv, hp, G%Domain, halo=2)
+    call create_group_pass(CS%pass_hp_uv, u_av, v_av, G%Domain, halo=max(2,obc_stencil))
+    call create_group_pass(CS%pass_hp_uv, uh(:,:,:), vh(:,:,:), G%Domain, halo=max(2,obc_stencil))
+    call create_group_pass(cs%pass_h, h, g%domain, halo=max(2,cont_stencil))
+    call create_group_pass(cs%pass_av_uvh, u_av, v_av, g%domain, halo=max(2,obc_stencil))
+    call create_group_pass(CS%pass_av_uvh, uh(:,:,:), vh(:,:,:), G%Domain, halo=max(2,obc_stencil))
+  endif
   call cpu_clock_end(id_clock_pass)
   !--- end set up for group halo pass
 
@@ -1578,7 +1587,11 @@ subroutine initialize_dyn_split_RK2(u, v, h, tv, uh, vh, eta, Time, G, GV, US, p
                    filename=dirs%input_filename, directory=dirs%restart_input_dir, &
                    success=read_h2, scale=1.0/GV%H_to_mks)
       if (read_uv .and. read_h2) then
-        call pass_var(CS%h_av, G%Domain, clock=id_clock_pass_init)
+        if (CS%CoriolisAdv%Coriolis_Scheme == CS%CoriolisAdv%WENO7th_ENSTRO_val) then
+          call pass_var(CS%h_av, G%Domain, halo=4, clock=id_clock_pass_init)
+        else
+          call pass_var(CS%h_av, G%Domain, clock=id_clock_pass_init)
+        endif
       else
         do k=1,nz ; do j=jsd,jed ; do i=isd,ied ; h_tmp(i,j,k) = h(i,j,k) ; enddo ; enddo ; enddo
         call continuity(CS%u_av, CS%v_av, h, h_tmp, uh, vh, dt, G, GV, US, CS%continuity_CSp, CS%OBC, pbv)
@@ -1587,7 +1600,11 @@ subroutine initialize_dyn_split_RK2(u, v, h, tv, uh, vh, eta, Time, G, GV, US, p
           CS%h_av(i,j,k) = 0.5*(h(i,j,k) + h_tmp(i,j,k))
         enddo ; enddo ; enddo
       endif
-      call pass_vector(CS%u_av, CS%v_av, G%Domain, halo=2, clock=id_clock_pass_init, complete=.false.)
+      if (CS%CoriolisAdv%Coriolis_Scheme == CS%CoriolisAdv%WENO7th_ENSTRO_val) then
+        call pass_vector(CS%u_av, CS%v_av, G%Domain, halo=4, clock=id_clock_pass_init, complete=.false.)
+      else
+        call pass_vector(CS%u_av, CS%v_av, G%Domain, halo=2, clock=id_clock_pass_init, complete=.false.)
+      endif
       call pass_vector(uh, vh, G%Domain, halo=2, clock=id_clock_pass_init, complete=.true.)
       call CorAdCalc(CS%u_av, CS%v_av, CS%h_av, uh, vh, CS%CAu_pred, CS%CAv_pred, CS%OBC, CS%ADp, &
                      G, GV, US, CS%CoriolisAdv, pbv) !, Waves=Waves)
