@@ -27,7 +27,7 @@ public CorAdCalc, CoriolisAdv_init, CoriolisAdv_end
 #include <MOM_memory.h>
 
 !> Control structure for mom_coriolisadv
-type, public :: CoriolisAdv_CS ; private
+type, public :: CoriolisAdv_CS ; private 
   logical :: initialized = .false. !< True if this control structure has been initialized.
   integer :: Coriolis_Scheme !< Selects the discretization for the Coriolis terms.
                              !! Valid values are:
@@ -37,6 +37,10 @@ type, public :: CoriolisAdv_CS ; private
                              !! - SADOURNY75_ENSTRO - Sadourny, JAS 1975, Enstrophy
                              !! - ARAKAWA_LAMB81    - Arakawa & Lamb, MWR 1981, Energy & Enstrophy
                              !! - ARAKAWA_LAMB_BLEND - A blend of Arakawa & Lamb with Arakawa & Hsu and Sadourny energy.
+                             !! - UP3_PV_ENSTRO     - Third-order upwind scheme for PV reconstruction
+                             !! - UP3_ENSTRO        - Third-order upwind scheme for absolute vorticity reconstruction
+                             !! - WENOVI7TH_PV_ENSTRO    - 7th-order WENO scheme for PV reconstruction
+                             !! - WENOVI7TH_ENSTRO       - 7th-order WENO scheme for absolute vorticity reconstruction
                              !! The default, SADOURNY75_ENERGY, is the safest choice then the
                              !! deformation radius is poorly resolved.
   integer :: KE_Scheme       !< KE_SCHEME selects the discretization for
@@ -74,6 +78,8 @@ type, public :: CoriolisAdv_CS ; private
                              !! relative to the other one is used.  This is only
                              !! available at present if Coriolis scheme is
                              !! SADOURNY75_ENERGY.
+  logical, public :: USE_WENO !< If WENOVI7TH_PV_ENSTRO and WENOVI7TH_ENSTRO schemes are used,
+                              !! this will be passed to RK2 modules to enlarge the halo update size. 
   type(time_type), pointer :: Time !< A pointer to the ocean model's clock.
   type(diag_ctrl), pointer :: diag !< A structure that is used to regulate the timing of diagnostic output.
   !>@{ Diagnostic IDs
@@ -98,14 +104,20 @@ integer, parameter :: ROBUST_ENSTRO     = 3
 integer, parameter :: SADOURNY75_ENSTRO = 4
 integer, parameter :: ARAKAWA_LAMB81    = 5
 integer, parameter :: AL_BLEND          = 6
+integer, parameter :: UP3_ENSTRO        = 8
 integer, parameter :: UP3_PV_ENSTRO     = 18
+integer, parameter :: wenovi7th_ENSTRO  = 9
+integer, parameter :: wenovi7th_PV_ENSTRO = 17
 character*(20), parameter :: SADOURNY75_ENERGY_STRING = "SADOURNY75_ENERGY"
 character*(20), parameter :: ARAKAWA_HSU_STRING = "ARAKAWA_HSU90"
 character*(20), parameter :: ROBUST_ENSTRO_STRING = "ROBUST_ENSTRO"
 character*(20), parameter :: SADOURNY75_ENSTRO_STRING = "SADOURNY75_ENSTRO"
 character*(20), parameter :: ARAKAWA_LAMB_STRING = "ARAKAWA_LAMB81"
 character*(20), parameter :: AL_BLEND_STRING = "ARAKAWA_LAMB_BLEND"
+character*(20), parameter :: UP3_ENSTRO_STRING = "UP3_ENSTRO"
 character*(20), parameter :: UP3_PV_ENSTRO_STRING = "UP3_PV_ENSTRO"
+character*(20), parameter :: WENOVI7TH_ENSTRO_STRING = "WENOVI7TH_ENSTRO"
+character*(20), parameter :: WENOVI7TH_PV_ENSTRO_STRING = "WENOVI7TH_PV_ENSTRO"
 !>@}
 !>@{ Enumeration values for KE_Scheme
 integer, parameter :: KE_ARAKAWA        = 10
@@ -241,6 +253,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   integer :: i, j, k, n, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   logical :: Stokes_VF
   real :: u_v, v_u, q_v, q_u ! u_v is the u velocity at v point, v_u is the v velocity at u point
+  integer :: seventh_order, fifth_order, third_order, second_order ! Order of accuracy for the WENO calculations
 
 ! To work, the following fields must be set outside of the usual
 ! is to ie range before this subroutine is called:
@@ -256,6 +269,14 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   eps_vel = 1.0e-10*US%m_s_to_L_T
   h_tiny = GV%Angstrom_H  ! Perhaps this should be set to h_neglect instead.
 
+
+  if (CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO .or. &
+      CS%Coriolis_Scheme == wenovi7th_ENSTRO) then
+    Isq = Isq - 3
+    Ieq = Ieq + 2
+    Jsq = Jsq - 3
+    Jeq = Jeq + 2
+  endif  
   !$OMP parallel do default(private) shared(Isq,Ieq,Jsq,Jeq,G,Area_h)
   do j=Jsq-1,Jeq+2 ; do I=Isq-1,Ieq+2
     Area_h(i,j) = G%mask2dT(i,j) * G%areaT(i,j)
@@ -287,6 +308,14 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
                   (Area_h(i+1,j) + Area_h(i,j+1))
   enddo ; enddo
 
+  if (CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO .or. &
+        CS%Coriolis_Scheme == wenovi7th_ENSTRO) then
+    Isq = Isq + 3
+    Ieq = Ieq - 2
+    Jsq = Jsq + 3
+    Jeq = Jeq - 2
+  endif
+
   Stokes_VF = .false.
   if (present(Waves)) then ; if (associated(Waves)) then
     Stokes_VF = Waves%Stokes_VF
@@ -297,6 +326,13 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   !$OMP                        pbv, Stokes_VF)
   do k=1,nz
 
+    if (CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO .or. &
+        CS%Coriolis_Scheme == wenovi7th_ENSTRO) then
+      Isq = Isq - 3
+      Ieq = Ieq + 2
+      Jsq = Jsq - 3
+      Jeq = Jeq + 2
+    endif
     ! Here the second order accurate layer potential vorticities, q,
     ! are calculated.  hq is  second order accurate in space.  Relative
     ! vorticity is second order accurate everywhere with free slip b.c.s,
@@ -510,6 +546,14 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
           qS(I,J) = stk_vort(I,J) * Ih_q(I,J)
         enddo; enddo
       endif
+    endif
+
+    if (CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO .or. &
+        CS%Coriolis_Scheme == wenovi7th_ENSTRO) then
+      Isq = Isq + 3
+      Ieq = Ieq - 2
+      Jsq = Jsq + 3
+      Jeq = Jeq - 2
     endif
 
     if (CS%id_rv > 0) then
@@ -749,6 +793,102 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
           CAu(I,j,k) = (q_u) * v_u
         enddo ; enddo
       endif
+    elseif (CS%Coriolis_Scheme == UP3_ENSTRO) then
+      if (CS%UP3_limiter == UP3_NONE) then
+        do j=js,je ; do I=Isq,Ieq
+          v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
+          call UP3_reconstruction(abs_vort(I,J-2), abs_vort(I,J-1),&
+                  abs_vort(I,J), abs_vort(I,J+1), v_u, q_u)
+          CAu(I,j,k) = (q_u) * v_u
+        enddo ; enddo
+      elseif (CS%UP3_limiter == UP3_KOREN) then
+        do j=js,je ; do I=Isq,Ieq
+          v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
+          call UP3_Koren_limiter_reconstruction(abs_vort(I,J-2), abs_vort(I,J-1),&
+                  abs_vort(I,J), abs_vort(I,J+1), v_u, q_u)
+          CAu(I,j,k) = (q_u) * v_u
+        enddo ; enddo
+      elseif (CS%UP3_limiter == UP3_SUPERBEE) then
+        do j=js,je ; do I=Isq,Ieq
+          v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
+          call UP3_Superbee_limiter_reconstruction(abs_vort(I,J-2), abs_vort(I,J-1),&
+                  abs_vort(I,J), abs_vort(I,J+1), v_u, q_u)
+          CAu(I,j,k) = (q_u) * v_u
+        enddo ; enddo
+      endif
+    elseif (CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO) then
+      do j=js,je ; do I=Isq,Ieq
+        v_u = 0.25*G%IdxCu(I,j)*((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
+        third_order = (G%mask2dCu(I,j-2) * G%mask2dCu(I,j-1) * G%mask2dCu(I,j) * &
+                       G%mask2dCu(I,j+1) * G%mask2dCu(I,j+2))
+
+        fifth_order   = third_order * G%mask2dCu(I,j-3) * G%mask2dCu(I,j+3)
+        seventh_order = fifth_order * G%mask2dCu(I,j-4) * G%mask2dCu(I,j-4)
+
+        ! compute the masking to make sure that inland values are not used
+        if (seventh_order == 1) then
+            ! all values are valid, we use seventh order reconstruction
+            call weno_seven_reconstruction(q(I,J-4), q(I,J-3), q(I,J-2), q(I,J-1), &
+                                           q(I,J)  , q(I,J+1), q(I,J+2), q(I,J+3), &
+                                           v_u, q_u)
+
+        elseif (fifth_order == 1) then
+            ! all values are valid, we use fifth order reconstruction
+            call weno_five_reconstruction(q(I,J-3), q(I,J-2), q(I,J-1), &
+                                          q(I,J),   q(I,J+1), q(I,J+2), &
+                                          v_u, q_u)
+
+        elseif (third_order == 1) then
+            ! only the middle values are valid, we use third order reconstruction
+            call weno_three_reconstruction(q(I,J-2), q(I,J-1), q(I,J), q(I,J+1), &
+                                           v_u, q_u)
+        else ! Upwind first order
+            if (v_u>0.) then
+                q_u = q(I,J-1)
+            else
+                q_u = q(I,J)
+            endif
+        endif
+
+        CAu(I,j,k) = (q_u * v_u)
+      enddo ; enddo
+    elseif (CS%Coriolis_Scheme == wenovi7th_ENSTRO) then
+      do j=js,je ; do I=Isq,Ieq
+        v_u = 0.25 * ((v(i+1,J,k) + v(i,J,k)) + (v(i,J-1,k) + v(i+1,J-1,k)))
+
+        third_order = (G%mask2dCu(I,j-2) * G%mask2dCu(I,j-1) * G%mask2dCu(I,j) * &
+                       G%mask2dCu(I,j+1) * G%mask2dCu(I,j+2))
+
+        fifth_order   = third_order * G%mask2dCu(I,j-3) * G%mask2dCu(I,j+3)
+        seventh_order = fifth_order * G%mask2dCu(I,j-4) * G%mask2dCu(I,j-4)
+
+        ! compute the masking to make sure that inland values are not used
+        if (seventh_order == 1) then
+            ! all values are valid, we use seventh order reconstruction
+            call weno_seven_reconstruction(abs_vort(I,J-4),abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), &
+                                           abs_vort(I,J)  ,abs_vort(I,J+1),abs_vort(I,J+2),abs_vort(I,J+3), &
+                                           v_u, q_u)
+
+        elseif (fifth_order == 1) then
+            ! all values are valid, we use fifth order reconstruction
+            call weno_five_reconstruction(abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), &
+                                          abs_vort(I,J),  abs_vort(I,J+1),abs_vort(I,J+2), &
+                                          v_u, q_u)
+
+        elseif (third_order == 1) then
+            ! only the middle values are valid, we use third order reconstruction
+            call weno_three_reconstruction(abs_vort(I,J-2),abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1), &
+                                           v_u, q_u)
+        else ! Upwind first order
+            if (v_u>0.) then
+                q_u = abs_vort(I,J-1)
+            else
+                q_u = abs_vort(I,J)
+            endif
+        endif
+
+        CAu(I,j,k) = (q_u * v_u)
+      enddo ; enddo
     endif
     ! Add in the additional terms with Arakawa & Lamb.
     if ((CS%Coriolis_Scheme == ARAKAWA_LAMB81) .or. &
@@ -896,6 +1036,109 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
           CAv(i,J,k) = - (q_v) * u_v
         enddo ; enddo
       endif
+    elseif (CS%Coriolis_Scheme == UP3_ENSTRO) then
+      if (CS%UP3_limiter == UP3_NONE) then
+        do J=Jsq,Jeq ; do i=is,ie
+          u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
+          call UP3_reconstruction(abs_vort(I-2,J), abs_vort(I-1,J),&
+                  abs_vort(I,J), abs_vort(I+1,J), u_v, q_v)
+          CAv(i,J,k) = - (q_v) * u_v
+        enddo ; enddo
+      elseif (CS%UP3_limiter == UP3_KOREN) then
+        do J=Jsq,Jeq ; do i=is,ie
+          u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
+          call UP3_Koren_limiter_reconstruction(abs_vort(I-2,J), abs_vort(I-1,J),&
+                  abs_vort(I,J), abs_vort(I+1,J), u_v, q_v)
+          CAv(i,J,k) = - (q_v) * u_v
+        enddo ; enddo
+      elseif (CS%UP3_limiter == UP3_SUPERBEE) then
+        do J=Jsq,Jeq ; do i=is,ie
+          u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
+          call UP3_Superbee_limiter_reconstruction(abs_vort(I-2,J), abs_vort(I-1,J),&
+                  abs_vort(I,J), abs_vort(I+1,J), u_v, q_v)
+          CAv(i,J,k) = - (q_v) * u_v
+        enddo ; enddo
+      endif
+    ! Calculate the tendencies of meridional velocity due to the Coriolis
+    ! force and momentum advection.  On a Cartesian grid, this is
+    !     CAv = - q * uh - d(KE)/dy.
+    elseif (CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO) then
+      do J=Jsq,Jeq ; do i=is,ie
+        u_v = 0.25*G%IdyCv(i,J)*((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
+
+        third_order = (G%mask2dCv(i-2,J) * G%mask2dCv(i-1,J) * G%mask2dCv(i,J) * G%mask2dCv(i+1,J) * &
+                       G%mask2dCv(i+2,J))
+
+        fifth_order   = third_order * G%mask2dCv(i-3,J) * G%mask2dCv(i+3,J)
+        seventh_order = fifth_order * G%mask2dCv(i-4,J) * G%mask2dCv(i+4,J)
+
+        ! compute the masking to make sure that inland values are not used
+        if (seventh_order == 1) then
+            ! all values are valid, we use seventh order reconstruction
+            call weno_seven_reconstruction(q(I-4,J), q(I-3,J), q(I-2,J), q(I-1,J), &
+                                           q(I,J)  , q(I+1,J), q(I+2,J), q(I+3,J), &
+                                           u_v, q_v)
+
+
+        elseif (fifth_order == 1) then
+            ! all values are valid, we use fifth order reconstruction
+            call weno_five_reconstruction(q(I-3,J), q(I-2,J), q(I-1,J), &
+                                          q(I,J)  , q(I+1,J), q(I+2,J), &
+                                          u_v, q_v)
+
+        elseif (third_order == 1) then
+            ! only the middle values are valid, we use third order reconstruction
+                call weno_three_reconstruction(q(I-2,J), q(I-1,J), q(I,J), q(I+1,J), &
+                                               u_v, q_v)
+        else ! Upwind first order!
+            if (u_v>0.) then
+                q_v = q(I-1,J)
+            else
+                q_v = q(I,J)
+            endif
+        endif
+
+        CAv(i,J,k) = - (q_v * u_v)
+      enddo ; enddo
+    elseif (CS%Coriolis_Scheme == wenovi7th_ENSTRO) then
+      do J=Jsq,Jeq ; do i=is,ie
+        u_v = 0.25* ((u(I-1,j,k) + u(I-1,j+1,k)) + (u(I,j,k) + u(I,j+1,k)))
+
+        third_order = (G%mask2dCv(i-2,J) * G%mask2dCv(i-1,J) * G%mask2dCv(i,J) * G%mask2dCv(i+1,J) * &
+                       G%mask2dCv(i+2,J))
+
+        fifth_order   = third_order * G%mask2dCv(i-3,J) * G%mask2dCv(i+3,J)
+        seventh_order = fifth_order * G%mask2dCv(i-4,J) * G%mask2dCv(i+4,J)
+
+        ! compute the masking to make sure that inland values are not used
+        if (seventh_order == 1) then
+            ! all values are valid, we use seventh order reconstruction
+            call weno_seven_reconstruction(abs_vort(I-4,J),abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), &
+                                           abs_vort(I,J)  ,abs_vort(I+1,J),abs_vort(I+2,J),abs_vort(I+3,J), &
+                                           u_v, q_v)
+
+            ! all values are valid, we use seventh order reconstruction
+
+        elseif (fifth_order == 1) then
+            ! all values are valid, we use fifth order reconstruction
+            call weno_five_reconstruction(abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), &
+                                          abs_vort(I,J),abs_vort(I+1,J),abs_vort(I+2,J), &
+                                          u_v, q_v)
+
+        elseif (third_order == 1) then
+            ! only the middle values are valid, we use third order reconstruction
+                call weno_three_reconstruction(abs_vort(I-2,J),abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J), &
+                                               u_v, q_v)
+        else ! Upwind first order!
+            if (u_v>0.) then
+                q_v = abs_vort(I-1,J)
+            else
+                q_v = abs_vort(I,J)
+            endif
+        endif
+
+        CAv(i,J,k) = - (q_v * u_v)
+      enddo ; enddo
     endif
     ! Add in the additonal terms with Arakawa & Lamb.
     if ((CS%Coriolis_Scheme == ARAKAWA_LAMB81) .or. &
@@ -1169,13 +1412,12 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
 
 end subroutine gradKE
 
-!> Reconstruct the PV onto the velocity point using a third-order upwind scheme
+!> Reconstruct the variable (e.g., PV, vorticity) onto the velocity point using a third-order upwind scheme
 subroutine UP3_reconstruction(q1,q2,q3,q4,u,qr)
-  real, intent(in)    :: q1, q2, q3, q4   !< PV on points i-2, i-1, i, i+1 
-                                          !! [L-1 T-1 ~> m-1 s-1]
-  real, intent(in)    :: u                !< Velocity on point i-1/2 [L T-1 ~> m s-1]
-  real, intent(inout) :: qr               !< Reconstructin of PV on point i-1/2 
-                                          !! [L-1 T-1 ~> m-1 s-1]
+  real, intent(in)    :: q1, q2, q3, q4   !< Values on points i-2, i-1, i, i+1
+  real, intent(in)    :: u                !< Velocity or thickness flux on point i-1/2 
+                                          !! [L T-1 ~> m s-1] or [L2 T-1 ~> m2 s-1]
+  real, intent(inout) :: qr               !< Reconstructin of point i-1/2
 
   if (u>0.) then
     qr = (-q1 + 5.*q2 + 2.*q3)/6.
@@ -1185,15 +1427,14 @@ subroutine UP3_reconstruction(q1,q2,q3,q4,u,qr)
 
 end subroutine UP3_reconstruction
 
-!> Reconstruct the PV onto the velocity point using a third-order upwind scheme
-!! with the Koren flux limiter
+!> Reconstruct the variable (e.g., PV, vorticity) onto the velocity point 
+!!using a third-order upwind scheme with the Koren flux limiter
 subroutine UP3_Koren_limiter_reconstruction(q1,q2,q3,q4,u,qr)
-  real, intent(in)    :: q1, q2, q3, q4   !< PV on points i-2, i-1, i, i+1 
-                                          !! [L-1 T-1 ~> m-1 s-1]
-  real, intent(in)    :: u                !< Velocity on point i-1/2 [L T-1 ~> m s-1]
-  real, intent(inout) :: qr               !< Reconstructin of PV on point i-1/2 
-                                          !! [L-1 T-1 ~> m-1 s-1]
-  real                :: theta, psi       ! Ratio of PV gradient
+  real, intent(in)    :: q1, q2, q3, q4   !< Values on points i-2, i-1, i, i+1
+  real, intent(in)    :: u                !< Velocity or thickness flux on point i-1/2 
+                                          !! [L T-1 ~> m s-1] or [L2 T-1 ~> m2 s-1]
+  real, intent(inout) :: qr               !< Reconstructin on point i-1/2
+  real                :: theta, psi       ! Ratio of gradient
 
   if (u>0.) then
     theta = (q2 - q1)/(q3 - q2 + 1e-20)
@@ -1207,15 +1448,14 @@ subroutine UP3_Koren_limiter_reconstruction(q1,q2,q3,q4,u,qr)
 
 end subroutine UP3_Koren_limiter_reconstruction
 
-!> Reconstruct the PV onto the velocity point using a third-order upwind scheme
-!! with the Superbee flux limiter
+!> Reconstruct the variable (e.g., PV, vorticity) onto the velocity point 
+!!using a third-order upwind scheme with the Superbee flux limiter
 subroutine UP3_Superbee_limiter_reconstruction(q1,q2,q3,q4,u,qr)
-  real, intent(in)    :: q1, q2, q3, q4   !< PV on points i-2, i-1, i, i+1 
-                                          !! [L-1 T-1 ~> m-1 s-1]
-  real, intent(in)    :: u                !< Velocity on point i-1/2 [L T-1 ~> m s-1]
-  real, intent(inout) :: qr               !< Reconstructin of PV on point i-1/2 
-                                          !! [L-1 T-1 ~> m-1 s-1]
-  real                :: theta, psi       ! Ratio of PV gradient
+  real, intent(in)    :: q1, q2, q3, q4   !< Values on points i-2, i-1, i, i+1
+  real, intent(in)    :: u                !< Velocity or thickness flux on point i-1/2 
+                                          !! [L T-1 ~> m s-1] or [L2 T-1 ~> m2 s-1]
+  real, intent(inout) :: qr               !< Reconstructin on point i-1/2
+  real                :: theta, psi       ! Ratio of the gradient
 
   if (u>0.) then
     theta = (q2 - q1)/(q3 - q2 + 1e-20)
@@ -1228,6 +1468,288 @@ subroutine UP3_Superbee_limiter_reconstruction(q1,q2,q3,q4,u,qr)
   endif
 
 end subroutine UP3_Superbee_limiter_reconstruction
+
+!> Reconstruct the variable (e.g., PV, vorticity) onto the velocity point using a third-order WENO scheme
+subroutine weno_three_reconstruction(q1, q2, q3, q4, u, qr)
+    real, intent(in)    :: q1, q2, q3, q4 !< Variable values on points i-2, i-1, i, i+1
+    real, intent(in)    :: u              !< Velocity or thickness flux on point i-1/2 
+                                          !! [L T-1 ~> m s-1] or [L2 T-1 ~> m2 s-1]
+    real, intent(inout) :: qr             !< Reconstructin on point i-1/2
+    real :: c0, c1                        ! Temporary variables 
+    real :: b0, b1                        ! Temporary variables [nondim]
+    real :: tau, w0, w1                   ! Temporary variables [nondim]
+    real :: s                             ! Temporary variables [nondim]
+
+    if (u>0.) then
+      call weno_three_reconstruction_0(q2, q3, c0)
+      call weno_three_reconstruction_1(q1, q2, c1)
+      call weno_three_weight(q2, q3, b0)
+      call weno_three_weight(q1, q2, b1)
+    else
+      call weno_three_reconstruction_0(q3, q2, c0)
+      call weno_three_reconstruction_1(q4, q3, c1)
+      call weno_three_weight(q3, q2, b0)
+      call weno_three_weight(q4, q3, b1)
+    endif
+
+    tau = abs(b0-b1)
+    w0  = 2./3. * (1 + (tau / (b0 + 1e-20))**2)
+    w1  = 1./3. * (1 + (tau / (b1 + 1e-20))**2)
+
+    s = 1. / (w0 + w1)
+    w0 = w0 * s
+    w1 = w1 * s
+
+    qr = w0 * c0 + w1 * c1
+
+end subroutine weno_three_reconstruction
+
+!> Compute weights for the two-point stencil for third-order WENO scheme
+subroutine weno_three_weight(q0, q1, w0)
+    real, intent(in) :: q0, q1   !< Values on two point
+    real, intent(inout) :: w0    !< Weight for this stencil
+
+    w0 = q0 * q0 - 2 * q0 * q1 + q1 * q1
+
+end subroutine weno_three_weight
+
+!> Reconstruction in the second upwindt stencil for third-order WENO scheme
+subroutine weno_three_reconstruction_0(q0, q1, w0)
+    real, intent(in) :: q0,q1    !< Values on two point
+    real, intent(inout) :: w0    !< Reconstruction of the quantity
+
+    w0 = (q0 + q1) * 0.5
+
+end subroutine weno_three_reconstruction_0
+
+!> Reconstruction in the first upwind stencil for third-order WENO scheme
+subroutine weno_three_reconstruction_1(q0, q1, w0)
+    real, intent(in) :: q0,q1    !< Values on two point
+    real, intent(inout) :: w0    !< Reconstruction of the quantity
+
+    w0 = (- q0 + 3 * q1) * 0.5
+
+end subroutine weno_three_reconstruction_1
+
+!> Reconstruct the variable (e.g., PV, vorticity) onto the velocity point using a fifth-order WENO scheme
+subroutine weno_five_reconstruction(q1, q2, q3, q4, q5, q6, u, qr)
+    real, intent(in)    :: q1, q2, q3, q4, q5, q6 !< Variable values on points i-3, i-2, i-1, i, i+1, i+2
+    real, intent(in)    :: u                      !< Velocity or thickness flux on point i-1/2 
+                                                  !! [L T-1 ~> m s-1] or [L2 T-1 ~> m2 s-1]
+    real, intent(inout) :: qr                     !< Reconstructin on point i-1/2
+    real :: c0, c1, c2                            ! Temporary variables 
+    real :: b0, b1, b2                            ! Temporary variables [nondim]
+    real :: tau, w0, w1, w2                       ! Temporary variables [nondim]
+    real :: s                                     ! Temporary variables [nondim]
+
+    if (u>0.) then
+      call weno_five_reconstruction_0(q3, q4, q5, c0)
+      call weno_five_reconstruction_1(q2, q3, q4, c1)
+      call weno_five_reconstruction_2(q1, q2, q3, c2)
+      call weno_five_weight_0(q3, q4, q5, b0)
+      call weno_five_weight_1(q2, q3, q4, b1)
+      call weno_five_weight_2(q1, q2, q3, b2)
+    else
+      call weno_five_reconstruction_0(q4, q3, q2, c0)
+      call weno_five_reconstruction_1(q5, q4, q3, c1)
+      call weno_five_reconstruction_2(q6, q5, q4, c2)
+      call weno_five_weight_0(q4, q3, q2, b0)
+      call weno_five_weight_1(q5, q4, q3, b1)
+      call weno_five_weight_2(q6, q5, q4, b2)
+    endif
+
+    tau = abs(b0 - b2)
+    w0  = 3./10. * (1 + (tau / (b0 + 1e-20))**2)
+    w1  = 3./5.  * (1 + (tau / (b1 + 1e-20))**2)
+    w2  = 1./10. * (1 + (tau / (b2 + 1e-20))**2)
+
+    s = 1. / (w0 + w1 + w2)
+    w0 = w0 * s
+    w1 = w1 * s
+    w2 = w2 * s
+
+    qr = w0 * c0 + w1 * c1 + w2 * c2
+
+end subroutine weno_five_reconstruction
+
+!> Compute weights for the third upwind stencil of the fifth-order WENO scheme
+subroutine weno_five_weight_0(q0, q1, q2, w0)
+  real, intent(in) :: q0, q1, q2  !< Values on three points
+  real, intent(inout) :: w0       !< Weight for this stencil
+
+  w0 = q0 * (10 * q0 - 31 * q1 + 11 * q2) + q1 * (25 * q1 - 19 * q2) + 4 * q2 * q2
+
+end subroutine weno_five_weight_0
+
+!> Compute weights for the second upwind stencil of the fifth-order WENO scheme
+subroutine weno_five_weight_1(q0, q1, q2, w1)
+  real, intent(in) :: q0, q1, q2   !< Values on three points
+  real, intent(inout) :: w1        !< Weight for this stencil
+
+  w1 = q0 * (4 * q0 - 13 * q1 + 5 * q2) + q1 * (13 * q1 - 13 * q2) + 4 * q2 * q2
+
+end subroutine weno_five_weight_1
+
+!> Compute weights for the first upwind stencil of the fifth-order WENO scheme
+subroutine weno_five_weight_2(q0, q1, q2, w2)
+  real, intent(in) :: q0, q1, q2   !< Values on three points
+  real, intent(inout) :: w2        !< Weight for this stencil
+
+  w2 = q0 * (4 * q0 - 19 * q1 + 11 * q2) + q1 * (25 * q1 - 31 * q2) + 10 * q2 * q2
+
+end subroutine weno_five_weight_2
+
+!> Reconstruction in the third upwind stencil for fifth-order WENO scheme
+subroutine weno_five_reconstruction_0(q0, q1, q2, p0)
+  real, intent(in) :: q0, q1, q2   !< Values on three points
+  real, intent(inout) :: p0        !< Reconstruction of the quantity
+
+  p0 = (2*q0 + 5*q1 - q2) / 6.
+
+end subroutine weno_five_reconstruction_0
+
+!> Reconstruction in the second upwind stencil for fifth-order WENO scheme
+subroutine weno_five_reconstruction_1(q0, q1, q2, p1)
+  real, intent(in) :: q0, q1, q2      !< Values on three points
+  real, intent(inout) :: p1         !< Reconstruction of the quantity
+
+  p1 = (-q0 + 5*q1 + 2*q2) / 6.
+
+end subroutine weno_five_reconstruction_1
+
+!> Reconstruction in the first upwind stencil for fifth-order WENO scheme
+subroutine weno_five_reconstruction_2(q0, q1, q2, p2)
+  real, intent(in) :: q0, q1, q2     !< Values on three points
+  real, intent(inout) :: p2          !< Reconstruction of the quantity
+
+  p2 = (2*q0 - 7*q1 + 11*q2) / 6.
+
+end subroutine weno_five_reconstruction_2
+
+!> Reconstruct the variable (e.g., PV, vorticity) onto the velocity point using a seventh-order WENO scheme
+subroutine weno_seven_reconstruction(q1, q2, q3, q4, q5, q6, q7, q8, &
+                                     u, qr)
+  real, intent(in)    :: q1, q2, q3, q4, q5, q6, q7, q8 
+  !< Variable values on points i-4, i-3, i-2, i-1, i, i+1, i+2, i+3
+  real, intent(in)    :: u    !< Velocity or thickness flux on point i-1/2 
+                              !! [L T-1 ~> m s-1] or [L2 T-1 ~> m2 s-1]
+  real, intent(inout) :: qr   !< Reconstructin on point i-1/2
+  real :: c0, c1, c2, c3      ! Temporary variables 
+  real :: b0, b1, b2, b3      ! Temporary variables [nondim]
+  real :: tau, w0, w1, w2, w3 ! Temporary variables [nondim]
+  real :: s                   ! Temporary variables [nondim]
+
+  if (u>0.) then
+    call weno_seven_reconstruction_0(q4, q5, q6, q7, c0)
+    call weno_seven_reconstruction_1(q3, q4, q5, q6, c1)
+    call weno_seven_reconstruction_2(q2, q3, q4, q5, c2)
+    call weno_seven_reconstruction_3(q1, q2, q3, q4, c3)
+    call weno_seven_weight_0(q4, q5, q6, q7, b0)
+    call weno_seven_weight_1(q3, q4, q5, q6, b1)
+    call weno_seven_weight_2(q2, q3, q4, q5, b2)
+    call weno_seven_weight_3(q1, q2, q3, q4, b3)
+  else
+    call weno_seven_reconstruction_0(q5, q4, q3, q2, c0)
+    call weno_seven_reconstruction_1(q6, q5, q4, q3, c1)
+    call weno_seven_reconstruction_2(q7, q6, q5, q4, c2)
+    call weno_seven_reconstruction_3(q8, q7, q6, q5, c3)
+    call weno_seven_weight_0(q5, q4, q3, q2, b0)
+    call weno_seven_weight_1(q6, q5, q4, q3, b1)
+    call weno_seven_weight_2(q7, q6, q5, q4, b2)
+    call weno_seven_weight_3(q8, q7, q6, q5, b3)
+  endif
+
+  tau = abs(b0 + 3 * b1 - 3 * b2 - b3)
+  w0  = 4./35.  * (1 + (tau / (b0 + 1e-20))**2)
+  w1  = 18./35. * (1 + (tau / (b1 + 1e-20))**2)
+  w2  = 12./35. * (1 + (tau / (b2 + 1e-20))**2)
+  w3  = 1./35.  * (1 + (tau / (b3 + 1e-20))**2)
+
+  s = 1. / (w0 + w1 + w2 + w3)
+  w0 = w0 * s
+  w1 = w1 * s
+  w2 = w2 * s
+  w3 = w3 * s
+
+  qr = w0 * c0 + w1 * c1 + w2 * c2 + w3 * c3
+
+end subroutine weno_seven_reconstruction
+
+!> Compute weights for the fourth upwind stencil of the seventh-order WENO scheme
+subroutine weno_seven_weight_0(q0, q1, q2, q3, w0)
+  real, intent(in) :: q0, q1, q2, q3 !< Values on three points
+  real, intent(inout) :: w0          !< Weight for this stencil
+
+  w0 = q0 * (2.107 * q0 - 9.402 * q1 + 7.042 * q2 - 1.854 * q3) + q1 * (11.003 * q1 - 17.246 * q2 + 4.642 * q3) + &
+       q2 * (7.043 * q2 - 3.882 * q3) + 0.547 * q3 * q3
+
+end subroutine weno_seven_weight_0
+
+!> Compute weights for the third upwind stencil of the seventh-order WENO scheme
+subroutine weno_seven_weight_1(q0, q1, q2, q3, w1)
+  real, intent(in) :: q0, q1, q2, q3  !< Values on three points
+  real, intent(inout) :: w1           !< Weight for this stencil
+
+  w1 = q0 * (0.547 * q0 - 2.522 * q1 + 1.922 * q2 - 0.494 * q3) + q1 * (3.443 * q1 - 5.966 * q2 + 1.602 * q3) + &
+       q2 * (2.843 * q2 - 1.642 * q3) + 0.267 * q3 * q3
+
+end subroutine weno_seven_weight_1
+
+!> Compute weights for the second upwind stencil of the seventh-order WENO scheme
+subroutine weno_seven_weight_2(q0, q1, q2, q3, w2)
+  real, intent(in) :: q0, q1, q2, q3  !< Values on three points
+  real, intent(inout) :: w2           !< Weight for this stencil
+
+  w2 = q0 * (0.267 * q0 - 1.642 * q1 + 1.602 * q2 - 0.494 * q3) + q1 * (2.843 * q1 - 5.966 * q2 + 1.922 * q3) + &
+       q2 * (3.443 * q2 - 2.522 * q3) + 0.547 * q3 * q3
+
+end subroutine weno_seven_weight_2
+
+!> Compute weights for the first upwind stencil of the seventh-order WENO scheme
+subroutine weno_seven_weight_3(q0, q1, q2, q3, w3)
+  real, intent(in) :: q0, q1, q2, q3  !< Values on three points
+  real, intent(inout) :: w3           !< Weight for this stencil
+
+  w3 = q0 * (0.547  * q0 - 3.882 * q1 + 4.642 * q2 - 1.854 * q3) + q1 * (7.043 * q1 - 17.246 * q2 + 7.042 * q3) + &
+       q2 * (11.003 * q2 - 9.402 * q3) + 2.107 * q3 * q3
+
+end subroutine weno_seven_weight_3
+
+!> Reconstruction in the fourth upwind stencil for seventh-order WENO scheme
+subroutine weno_seven_reconstruction_0(q0, q1, q2, q3, p0)
+  real, intent(in) :: q0, q1, q2, q3   !< Values on stencil points
+  real, intent(inout) :: p0            !< Reconstruction of the quantity
+
+  p0 = (6*q0 + 26*q1 - 10*q2 + 2*q3) / 24.
+
+end subroutine weno_seven_reconstruction_0
+
+!> Reconstruction in the third upwind stencil for seventh-order WENO scheme
+subroutine weno_seven_reconstruction_1(q0, q1, q2, q3, p1)
+  real, intent(in) :: q0, q1, q2, q3      !< Values on stencil points
+  real, intent(inout) :: p1            !< Reconstruction of the quantity
+
+  p1 = (-2*q0 + 14*q1 + 14*q2 - 2*q3) / 24.
+
+end subroutine weno_seven_reconstruction_1
+
+!> Reconstruction in the second upwind stencil for seventh-order WENO scheme
+subroutine weno_seven_reconstruction_2(q0, q1, q2, q3, p2)
+  real, intent(in) :: q0, q1, q2, q3    !< Values on stencil points
+  real, intent(inout) :: p2             !< Reconstruction of the quantity
+
+  p2 = (2*q0 - 10*q1 + 26*q2 + 6*q3) / 24.
+
+end subroutine weno_seven_reconstruction_2
+
+!> Reconstruction in the first upwind stencil for seventh-order WENO scheme
+subroutine weno_seven_reconstruction_3(q0, q1, q2, q3, p3)
+  real, intent(in) :: q0, q1, q2, q3  !< Values on stencil points
+  real, intent(inout) :: p3            !< Reconstruction of the quantity
+
+  p3 = (-6*q0 + 26*q1 - 46*q2 + 50*q3) / 24.
+
+end subroutine weno_seven_reconstruction_3
 
 !> Initializes the control structure for MOM_CoriolisAdv
 subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
@@ -1280,7 +1802,10 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
                  "\t ARAKAWA_LAMB81    - Arakawa & Lamb, 1981; En. + Enst.\n"//&
                  "\t ARAKAWA_LAMB_BLEND - A blend of Arakawa & Lamb with \n"//&
                  "\t                      Arakawa & Hsu and Sadourny energy \n"//&
-                 "\t UP3_PV_ENSTRO   - 3rd-order PV enstrophy \n", &
+                 "\t UP3_ENSTRO        - 3rd-order vorticity enstrophy \n"//&
+                 "\t UP3_PV_ENSTRO     - 3rd-order PV enstrophy \n"//&
+                 "\t WENOVI7TH_PV_ENSTRO   - 7th-order WENO PV enstrophy \n"//&
+                 "\t WENOVI7TH_ENSTRO  - 7th-order WENO enstrophy \n", &
                  default=SADOURNY75_ENERGY_STRING)
   tmpstr = uppercase(tmpstr)
   select case (tmpstr)
@@ -1297,13 +1822,25 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
     case (ROBUST_ENSTRO_STRING)
       CS%Coriolis_Scheme = ROBUST_ENSTRO
       CS%Coriolis_En_Dis = .false.
+    case (UP3_ENSTRO_STRING)
+      CS%Coriolis_Scheme = UP3_ENSTRO
     case (UP3_PV_ENSTRO_STRING)
       CS%Coriolis_Scheme = UP3_PV_ENSTRO
+    case (WENOVI7TH_PV_ENSTRO_STRING)
+      CS%Coriolis_Scheme = wenovi7th_PV_ENSTRO
+    case (WENOVI7TH_ENSTRO_STRING)
+      CS%Coriolis_Scheme = wenovi7th_ENSTRO
     case default
       call MOM_mesg('CoriolisAdv_init: Coriolis_Scheme ="'//trim(tmpstr)//'"', 0)
       call MOM_error(FATAL, "CoriolisAdv_init: Unrecognized setting "// &
             "#define CORIOLIS_SCHEME "//trim(tmpstr)//" found in input file.")
   end select
+
+  CS%USE_WENO = .false.
+  if (CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO .or. CS%Coriolis_Scheme == wenovi7th_ENSTRO) then
+    CS%USE_WENO = .true.
+  endif
+
   if (CS%Coriolis_Scheme == AL_BLEND) then
     call get_param(param_file, mdl, "CORIOLIS_BLEND_WT_LIN", CS%wt_lin_blend, &
                  "A weighting value for the ratio of inverse thicknesses, "//&
@@ -1358,7 +1895,7 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
                "#define KE_SCHEME "//trim(tmpstr)//" in input file is invalid.")
   end select
 
-  if ( CS%Coriolis_Scheme == UP3_PV_ENSTRO .or. &
+  if ( CS%Coriolis_Scheme == UP3_PV_ENSTRO .or. CS%Coriolis_Scheme == UP3_ENSTRO .or. &
       CS%KE_Scheme == KE_UP3) then
     call get_param(param_file, mdl, "UP3_LIMITER", tmpstr, &
             "The flux limiter for UP3 scheme. Valid scheme are: \n"//&
