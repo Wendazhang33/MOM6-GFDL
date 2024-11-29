@@ -125,6 +125,10 @@ type, public :: MEKE_CS ; private
   integer :: eke_src !< Enum specifying whether EKE is stepped forward prognostically (default),
                      !! read in from a file, or inferred via a neural network
   logical :: sqg_use_MEKE !< If True, use MEKE%Le for the SQG vertical structure.
+  logical :: MEKE_use_topo_fn  !< If True, use a topography slope function to scale down MEKE diffusivity.
+  logical :: use_topo_burger   !< If True, use a topography slope Burger number to scale down MEKE diffusivity.
+  real    :: topo_slope_coef   !< Coefficient for the topography slope function [nondim]
+  real    :: topo_slope_power   !< Power of the slope ratio [nondim]
   type(diag_ctrl), pointer :: diag => NULL() !< A type that regulates diagnostics output
   !>@{ Diagnostic handles
   integer :: id_MEKE = -1, id_Ue = -1, id_Kh = -1, id_src = -1
@@ -136,6 +140,7 @@ type, public :: MEKE_CS ; private
   integer :: id_Le = -1, id_gamma_b = -1, id_gamma_t = -1
   integer :: id_Lrhines = -1, id_Leady = -1
   integer :: id_MEKE_equilibrium = -1
+  integer :: id_topo_fn = -1
   !>@}
   type(external_field) :: eke_handle   !< Handle for reading in EKE from a file
   ! Infrastructure
@@ -211,6 +216,7 @@ subroutine step_forward_MEKE(MEKE, h, SN_u, SN_v, visc, dt, G, GV, US, CS, hu, h
     LmixScale, &    ! Eddy mixing length [L ~> m].
     barotrFac2, &   ! Ratio of EKE_barotropic / EKE [nondim]
     bottomFac2, &   ! Ratio of EKE_bottom / EKE [nondim]
+    topo_fn, &      ! Topography slope function [nondim]
     tmp, &          ! Temporary variable for computation of diagnostic velocities [L T-1 ~> m s-1]
     equilibrium_value ! The equilibrium value of MEKE to be calculated at each
                     ! time step [L2 T-2 ~> m2 s-2]
@@ -765,6 +771,24 @@ subroutine step_forward_MEKE(MEKE, h, SN_u, SN_v, visc, dt, G, GV, US, CS, hu, h
     enddo ; enddo
   endif
 
+  if (CS%MEKE_use_topo_fn) then
+    call topo_function(CS, MEKE, G, GV, US, SN_u, SN_v, depth_tot, CS%use_topo_burger, topo_fn)
+    if (CS%MEKE_KhCoeff > 0.) then
+      !$OMP parallel do default(shared)
+      do j=js,je ; do i=is,ie
+        MEKE%Kh(i,j) = MEKE%Kh(i,j) * topo_fn(i,j)
+      enddo ; enddo
+    endif
+
+    if (CS%viscosity_coeff_Ku /= 0.) then
+      !$OMP parallel do default(shared)
+      do j=js,je ; do i=is,ie
+        MEKE%Ku(i,j) = MEKE%Ku(i,j) * topo_fn(i,j)
+      enddo ; enddo
+    endif
+  endif
+
+
   if (allocated(MEKE%Kh) .or. allocated(MEKE%Ku) .or. allocated(MEKE%Au) &
       .or. allocated(MEKE%Le)) then
     call cpu_clock_begin(CS%id_clock_pass)
@@ -812,6 +836,7 @@ subroutine step_forward_MEKE(MEKE, h, SN_u, SN_v, visc, dt, G, GV, US, CS, hu, h
   if (CS%id_mom_src_bh>0) call post_data(CS%id_mom_src_bh, MEKE%mom_src_bh, CS%diag)
   if (CS%id_GME_snk>0) call post_data(CS%id_GME_snk, MEKE%GME_snk, CS%diag)
   if (CS%id_Le>0) call post_data(CS%id_Le, LmixScale, CS%diag)
+  if (CS%id_topo_fn>0) call post_data(CS%id_topo_fn, topo_fn, CS%diag)
   if (CS%id_gamma_b>0) then
     do j=js,je ; do i=is,ie
       bottomFac2(i,j) = sqrt(bottomFac2(i,j))
@@ -1022,6 +1047,95 @@ subroutine MEKE_equilibrium_restoring(CS, G, GV, US, SN_u, SN_v, depth_tot, &
 
   if (CS%id_MEKE_equilibrium>0) call post_data(CS%id_MEKE_equilibrium, equilibrium_value, CS%diag)
 end subroutine MEKE_equilibrium_restoring
+
+
+!> Calculates the topography-slope function that scales down eddy diffusivity when the topography slope
+!! is large
+subroutine topo_function(CS, MEKE, G, GV, US, SN_u, SN_v, depth_tot, use_topo_burger, topo_fn)
+  type(MEKE_CS),                     intent(in)    :: CS   !< MEKE control structure.
+  type(MEKE_type),                   intent(in)    :: MEKE !< MEKE field
+  type(ocean_grid_type),             intent(inout) :: G    !< Ocean grid.
+  type(verticalGrid_type),           intent(in)    :: GV   !< Ocean vertical grid structure.
+  type(unit_scale_type),             intent(in)    :: US   !< A dimensional unit scaling type
+  real, dimension(SZIB_(G),SZJ_(G)), intent(in)    :: SN_u !< Eady growth rate at u-points [T-1 ~> s-1].
+  real, dimension(SZI_(G),SZJB_(G)), intent(in)    :: SN_v !< Eady growth rate at v-points [T-1 ~> s-1].
+  real, dimension(SZI_(G),SZJ_(G)),  intent(in)    :: depth_tot !< The thickness of the water column [H ~> m or kg m-2].
+  logical,                           intent(in)    :: use_topo_burger !< If True, use the slope Burger number 
+                                                                      !! to compute the topography slope function
+  real, dimension(SZI_(G),SZJ_(G)),  intent(inout) :: topo_fn !< Topography slope function [nondim]
+  ! Local variables
+  real :: beta_topo ! Topographic vorticity gradient [T-1 L-1 ~> s-1 m-1]
+  real :: SN   ! The local Eady growth rate [T-1 ~> s-1]
+  real :: FatH ! Coriolis parameter at h points [T-1 ~> s-1]
+  real :: beta_topo_x, beta_topo_y  ! Topographic PV gradients in x and y [T-1 L-1 ~> s-1 m-1]
+  real :: topo_grad  ! Topographic gradient [L L-1 ~> m m-1]
+  real :: topo_x, topo_y  ! Topographic gradients in x and y [L L-1 ~> m m-1]
+  real :: h_neglect ! A negligible thickness [H ~> m or kg m-2]
+  real :: Lgrid ! Grid scale
+  integer :: i, j, is, ie, js, je
+
+  is = G%isc ; ie = G%iec ; js = G%jsc ; je = G%jec
+  h_neglect = GV%H_subroundoff
+
+  if (use_topo_burger) then
+
+    !$OMP do
+    do j=js,je ; do i=is,ie
+      ! If depth_tot is zero, then a division by zero FPE will be raised.  In this
+      ! case, we apply Adcroft's rule of reciprocals and set the term to zero.
+      if (depth_tot(i,j) == 0.0) then
+        topo_fn(i,j) = 0.
+      else
+        Lgrid = sqrt(G%areaT(i,j))   ! Grid scale
+        !### Consider different combinations of these estimates of topographic beta.
+        topo_x = 0.5 * ( &
+                      (depth_tot(i+1,j) - depth_tot(i,j)) * G%IdxCu(I,j)  &
+                   +  (depth_tot(i,j)   - depth_tot(i-1,j)) * G%IdxCu(I-1,j)) 
+        topo_y = 0.5 * ( &
+                      (depth_tot(i,j+1) - depth_tot(i,j)) * G%IdyCv(i,J)  &
+                   +  (depth_tot(i,j)   - depth_tot(i,j-1)) * G%IdyCv(i,J-1)) 
+        topo_grad =  sqrt((topo_x)**2 + (topo_y)**2 )
+        topo_fn(i,j) = depth_tot(i,j)**CS%topo_slope_power &
+                     /(depth_tot(i,j)**CS%topo_slope_power + &
+                   CS%topo_slope_coef * (topo_grad * MEKE%Rd_dx_h(i,j) * Lgrid)**CS%topo_slope_power)
+      endif
+  
+    enddo ; enddo
+
+  else
+    !$OMP do
+    do j=js,je ; do i=is,ie
+      Lgrid = sqrt(G%areaT(i,j))   ! Grid scale
+      SN = 0.25 * ( (SN_u(I,j) + SN_u(I-1,j)) + (SN_v(i,J) + SN_v(i,J-1)) )
+      FatH = 0.25* ( ( G%CoriolisBu(I,J) + G%CoriolisBu(I-1,J-1) ) + &
+                     ( G%CoriolisBu(I-1,J) + G%CoriolisBu(I,J-1) ) )  ! Coriolis parameter at h points
+  
+      ! If depth_tot is zero, then a division by zero FPE will be raised.  In this
+      ! case, we apply Adcroft's rule of reciprocals and set the term to zero.
+      if ((depth_tot(i,j) == 0.0) .or. (SN == 0)) then
+        topo_fn(i,j) = 0.
+      else
+        !### Consider different combinations of these estimates of topographic beta.
+        beta_topo_x = -CS%MEKE_topographic_beta * FatH * 0.5 * ( &
+                      (depth_tot(i+1,j)-depth_tot(i,j)) * G%IdxCu(I,j)  &
+                 / max(depth_tot(i+1,j), depth_tot(i,j), h_neglect) &
+              +       (depth_tot(i,j)-depth_tot(i-1,j)) * G%IdxCu(I-1,j) &
+                 / max(depth_tot(i,j), depth_tot(i-1,j), h_neglect) )
+        beta_topo_y = -CS%MEKE_topographic_beta * FatH * 0.5 * ( &
+                      (depth_tot(i,j+1)-depth_tot(i,j)) * G%IdyCv(i,J)  &
+                 / max(depth_tot(i,j+1), depth_tot(i,j), h_neglect) + &
+                      (depth_tot(i,j)-depth_tot(i,j-1)) * G%IdyCv(i,J-1) &
+                 / max(depth_tot(i,j), depth_tot(i,j-1), h_neglect) )
+        beta_topo =  sqrt((beta_topo_x)**2 + (beta_topo_y)**2 )
+        topo_fn(i,j) = SN**CS%topo_slope_power &
+              /(SN**CS%topo_slope_power + &
+                   CS%topo_slope_coef * (beta_topo * MEKE%Rd_dx_h(i,j) * Lgrid)**CS%topo_slope_power)
+      endif
+  
+    enddo ; enddo
+  endif
+
+end subroutine topo_function 
 
 !> Calculates the eddy mixing length scale and \f$\gamma_b\f$ and \f$\gamma_t\f$
 !! functions that are ratios of either bottom or barotropic eddy energy to the
@@ -1437,6 +1551,19 @@ logical function MEKE_init(Time, G, GV, US, param_file, diag, dbcomms_CS, CS, ME
   call get_param(param_file, mdl, "SQG_USE_MEKE", CS%sqg_use_MEKE, &
                  "If true, the eddy scale of MEKE is used for the SQG vertical structure ",&
                  default=.false.)
+  call get_param(param_file, mdl, "MEKE_USE_TOPO_FN", CS%MEKE_use_topo_fn, &
+                 "If true, use the topography slope function to scale down the MEKE diffusivity", &
+                 default=.false.)
+  call get_param(param_file, mdl, "USE_TOPO_BURGER", CS%use_topo_burger, &
+                 "If true, use the topography slope Burger number  to scale down the MEKE diffusivity", &
+                 default=.false., do_not_log = (.not. CS%MEKE_use_topo_fn))
+  call get_param(param_file, mdl, "TOPO_SLOPE_COEF", CS%topo_slope_coef, &
+                 "The coefficient for the topography slope function",&
+                 units="nondim", default=1.0, do_not_log = (.not. CS%MEKE_use_topo_fn))
+  call get_param(param_file, mdl, "TOPO_SLOPE_POWER", CS%topo_slope_power, &
+                 "The power for the topography slope function",&
+                 units="nondim", default=2.0, do_not_log = (.not. CS%MEKE_use_topo_fn))
+
 
   ! Nonlocal module parameters
   call get_param(param_file, mdl, "CDRAG", cdrag, &
@@ -1539,6 +1666,11 @@ logical function MEKE_init(Time, G, GV, US, param_file, diag, dbcomms_CS, CS, ME
   if (CS%MEKE_equilibrium_restoring) then
     CS%id_MEKE_equilibrium = register_diag_field('ocean_model', 'MEKE_equilibrium', diag%axesT1, Time, &
      'Equilibrated Mesoscale Eddy Kinetic Energy', 'm2 s-2', conversion=US%L_T_to_m_s**2)
+  endif
+
+  if (CS%MEKE_use_topo_fn) then
+    CS%id_topo_fn = register_diag_field('ocean_model', 'MEKE_topo_fn', diag%axesT1, Time, &
+     'Topography slope function for MEKE diffusivity', 'nondim')
   endif
 
   CS%id_clock_pass = cpu_clock_id('(Ocean continuity halo updates)', grain=CLOCK_ROUTINE)
