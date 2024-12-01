@@ -107,6 +107,7 @@ integer, parameter :: ARAKAWA_LAMB81    = 5
 integer, parameter :: AL_BLEND          = 6
 integer, parameter :: UP3_ENSTRO        = 8
 integer, parameter :: UP3_PV_ENSTRO     = 18
+integer, parameter :: UP1_PV_ENSTRO     = 19
 integer, parameter :: wenovi7th_ENSTRO  = 9
 integer, parameter :: wenovi7th_PV_ENSTRO = 17
 character*(20), parameter :: SADOURNY75_ENERGY_STRING = "SADOURNY75_ENERGY"
@@ -117,6 +118,7 @@ character*(20), parameter :: ARAKAWA_LAMB_STRING = "ARAKAWA_LAMB81"
 character*(20), parameter :: AL_BLEND_STRING = "ARAKAWA_LAMB_BLEND"
 character*(20), parameter :: UP3_ENSTRO_STRING = "UP3_ENSTRO"
 character*(20), parameter :: UP3_PV_ENSTRO_STRING = "UP3_PV_ENSTRO"
+character*(20), parameter :: UP1_PV_ENSTRO_STRING = "UP1_PV_ENSTRO"
 character*(20), parameter :: WENOVI7TH_ENSTRO_STRING = "WENOVI7TH_ENSTRO"
 character*(20), parameter :: WENOVI7TH_PV_ENSTRO_STRING = "WENOVI7TH_PV_ENSTRO"
 !>@}
@@ -774,6 +776,13 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
           CAu(I,j,k) = (QVHeff / ( h_tiny + ((Heff1+Heff4) + (Heff2+Heff3)) ) ) * G%IdxCu(I,j)
         endif
       enddo ; enddo
+    elseif (CS%Coriolis_Scheme == UP1_PV_ENSTRO) then
+      do j=js,je ; do I=Isq,Ieq
+        v_u = 0.25*G%IdxCu(I,j)*((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
+        call UP1_reconstruction(q(I,J-2), q(I,J-1),&
+                q(I,J), q(I,J+1), v_u, q_u)
+        CAu(I,j,k) = (q_u) * v_u
+      enddo ; enddo
     elseif (CS%Coriolis_Scheme == UP3_PV_ENSTRO) then
       if (CS%UP3_limiter == UP3_NONE) then
         do j=js,je ; do I=Isq,Ieq
@@ -1018,6 +1027,13 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
           CAv(i,J,k) = - QUHeff / &
                        (h_tiny + ((Heff1+Heff4) +(Heff2+Heff3)) ) * G%IdyCv(i,J)
         endif
+      enddo ; enddo
+    elseif (CS%Coriolis_Scheme == UP1_PV_ENSTRO) then
+      do J=Jsq,Jeq ; do i=is,ie
+        u_v = 0.25*G%IdyCv(i,J)*((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
+        call UP1_reconstruction(q(I-2,J), q(I-1,J),&
+                q(I,J), q(I+1,J), u_v, q_v)
+        CAv(i,J,k) = - (q_v) * u_v
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == UP3_PV_ENSTRO) then
       if (CS%UP3_limiter == UP3_NONE) then
@@ -1423,12 +1439,27 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
 
 end subroutine gradKE
 
-!> Reconstruct the variable (e.g., PV, vorticity) onto the velocity point using a third-order upwind scheme
+!> reconstruct the variable (e.g., pv, vorticity) onto the velocity point using a first-order upwind scheme
+subroutine UP1_reconstruction(q1,q2,q3,q4,u,qr)
+  real, intent(in)    :: q1, q2, q3, q4   !< values on points i-2, i-1, i, i+1
+  real, intent(in)    :: u                !< velocity or thickness flux on point i-1/2
+                                          !! [l t-1 ~> m s-1] or [l2 t-1 ~> m2 s-1]
+  real, intent(inout) :: qr               !< reconstructin of point i-1/2
+
+  if (u>0.) then
+    qr = q2
+  else
+    qr = q3
+  endif
+
+end subroutine UP1_reconstruction
+
+!> reconstruct the variable (e.g., pv, vorticity) onto the velocity point using a third-order upwind scheme
 subroutine UP3_reconstruction(q1,q2,q3,q4,u,qr)
-  real, intent(in)    :: q1, q2, q3, q4   !< Values on points i-2, i-1, i, i+1
-  real, intent(in)    :: u                !< Velocity or thickness flux on point i-1/2
-                                          !! [L T-1 ~> m s-1] or [L2 T-1 ~> m2 s-1]
-  real, intent(inout) :: qr               !< Reconstructin of point i-1/2
+  real, intent(in)    :: q1, q2, q3, q4   !< values on points i-2, i-1, i, i+1
+  real, intent(in)    :: u                !< velocity or thickness flux on point i-1/2
+                                          !! [l t-1 ~> m s-1] or [l2 t-1 ~> m2 s-1]
+  real, intent(inout) :: qr               !< reconstructin of point i-1/2
 
   if (u>0.) then
     qr = (-q1 + 5.*q2 + 2.*q3)/6.
@@ -1816,6 +1847,7 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
                  "\t                      Arakawa & Hsu and Sadourny energy \n"//&
                  "\t UP3_ENSTRO        - 3rd-order vorticity enstrophy \n"//&
                  "\t UP3_PV_ENSTRO     - 3rd-order PV enstrophy \n"//&
+                 "\t UP1_PV_ENSTRO     - 1st-order PV enstrophy \n"//&
                  "\t WENOVI7TH_PV_ENSTRO   - 7th-order WENO PV enstrophy \n"//&
                  "\t WENOVI7TH_ENSTRO  - 7th-order WENO enstrophy \n", &
                  default=SADOURNY75_ENERGY_STRING)
@@ -1838,6 +1870,8 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
       CS%Coriolis_Scheme = UP3_ENSTRO
     case (UP3_PV_ENSTRO_STRING)
       CS%Coriolis_Scheme = UP3_PV_ENSTRO
+    case (UP1_PV_ENSTRO_STRING)
+      CS%Coriolis_Scheme = UP1_PV_ENSTRO
     case (WENOVI7TH_PV_ENSTRO_STRING)
       CS%Coriolis_Scheme = wenovi7th_PV_ENSTRO
     case (WENOVI7TH_ENSTRO_STRING)
