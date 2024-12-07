@@ -47,6 +47,7 @@ type, public :: CoriolisAdv_CS ; private
                              !! the kinetic energy. Valid values are:
                              !!  KE_ARAKAWA, KE_SIMPLE_GUDONOV, KE_GUDONOV
   integer :: UP3_limiter     !< UP3 scheme selects the flux limiter. Valid values are: NONE, KOREN, SUPERBEE
+  logical :: KE_use_limiter  !< If true, use the Koren limiter for KE_UP3 scheme
   integer :: PV_Adv_Scheme   !< PV_ADV_SCHEME selects the discretization for PV advection
                              !! Valid values are:
                              !! - PV_ADV_CENTERED - centered (aka Sadourny, 75)
@@ -1432,65 +1433,95 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
   elseif (CS%KE_Scheme == KE_UP3) then
     ! The following discretization of KE is based on the one-dimensional third-order
     ! upwind scheme which does not take horizontal grid factors into account
-    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-    ! compute the masking to make sure that inland values are not used
-      third_order_u = (G%mask2dCu(I-2,j) * G%mask2dCu(I-1,j)* &
-                     G%mask2dCu(I,j) * G%mask2dCu(I+1,j))
-      h_min = min((h(i-2,j,k) + h(i-1,j,k)), (h(i-1,j,k) + h(i,j,k)), &
-                     (h(i,j,k) + h(i+1,j,k)), (h(i+1,j,k) + h(i+2,j,k)))
+    if (CS%KE_use_limiter) then
+      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+        ! compute the masking to make sure that inland values are not used
+        third_order_u = (G%mask2dCu(I-2,j) * G%mask2dCu(I-1,j)* &
+                       G%mask2dCu(I,j) * G%mask2dCu(I+1,j))
+        h_min = min((h(i-2,j,k) + h(i-1,j,k)), (h(i-1,j,k) + h(i,j,k)), &
+                       (h(i,j,k) + h(i+1,j,k)), (h(i+1,j,k) + h(i+2,j,k)))
 
-      if (h_min > CS%h_thresh .and. third_order_u == 1) then
-        up = (-u(I-2,j,k) + 7*u(I-1,j,k) + 7*u(I,j,k) - u(I+1,j,k))/12.
-        if (CS%UP3_limiter == UP3_NONE) then
-          call UP3_reconstruction(u(I-2,j,k), u(I-1,j,k),&
-                  u(I,j,k), u(I+1,j,k), up, um)
-        elseif (CS%UP3_limiter == UP3_KOREN) then
+        if (h_min > CS%h_thresh .and. third_order_u == 1) then
+          up = (-u(I-2,j,k) + 7*u(I-1,j,k) + 7*u(I,j,k) - u(I+1,j,k))/12.
           call UP3_Koren_limiter_reconstruction(u(I-2,j,k), u(I-1,j,k),&
                   u(I,j,k), u(I+1,j,k), up, um, theta)
-        elseif (CS%UP3_limiter == UP3_SUPERBEE) then
-          call UP3_Superbee_limiter_reconstruction(u(I-2,j,k), u(I-1,j,k),&
-                  u(I,j,k), u(I+1,j,k), up, um)
-        endif
-      else
-        up = (u(I-1,j,k) + u(I,j,k))*0.5
-        if (up>0.) then
-          um = u(I-1,j,k)
-        elseif (up<0.) then
-          um = u(I,j,k)
         else
-          um = up
+          up = (u(I-1,j,k) + u(I,j,k))*0.5
+          if (up>0.) then
+            um = u(I-1,j,k)
+          elseif (up<0.) then
+            um = u(I,j,k)
+          else
+            um = up
+          endif
         endif
-      endif
 
-      third_order_v = (G%mask2dCv(i,J-2) * G%mask2dCv(i,J-1)* &
-                     G%mask2dCv(i,J) * G%mask2dCv(i,J+1))
-      h_min = min((h(i,j-2,k) + h(i,j-1,k)),  (h(i,j-1,k) + h(i,j,k)), &
-                  (h(i,j,k) + h(i,j+1,k)), (h(i,j+1,k) + h(i,j+2,k)))
-      if (h_min > CS%h_thresh .and. third_order_v ==1) then
-        vp = (-v(i,J-2,k) + 7*v(i,J-1,k) + 7*v(i,J,k) - v(i,J+1,k))/12.
-        if (CS%UP3_limiter == UP3_NONE) then
-          call UP3_reconstruction(v(i,J-2,k), v(i,J-1,k),&
-                  v(i,J,k), v(i,J+1,k), vp, vm)
-        elseif (CS%UP3_limiter == UP3_KOREN) then
+        third_order_v = (G%mask2dCv(i,J-2) * G%mask2dCv(i,J-1)* &
+                       G%mask2dCv(i,J) * G%mask2dCv(i,J+1))
+        h_min = min((h(i,j-2,k) + h(i,j-1,k)),  (h(i,j-1,k) + h(i,j,k)), &
+                    (h(i,j,k) + h(i,j+1,k)), (h(i,j+1,k) + h(i,j+2,k)))
+        if (h_min > CS%h_thresh .and. third_order_v ==1) then
+          vp = (-v(i,J-2,k) + 7*v(i,J-1,k) + 7*v(i,J,k) - v(i,J+1,k))/12.
           call UP3_Koren_limiter_reconstruction(v(i,J-2,k), v(i,J-1,k),&
                   v(i,J,k), v(i,J+1,k), vp, vm, theta)
-        elseif (CS%UP3_limiter == UP3_SUPERBEE) then
-          call UP3_Superbee_limiter_reconstruction(v(i,J-2,k), v(i,J-1,k),&
-                  v(i,J,k), v(i,J+1,k), vp, vm)
-        endif
-      else
-        vp = (v(i,J-1,k) + v(i,J,k))*0.5
-        if (vp>0.) then
-          vm = v(i,J-1,k)
-        elseif (vp<0.) then
-          vm = v(i,J,k)
         else
-          vm = vp
+          vp = (v(i,J-1,k) + v(i,J,k))*0.5
+          if (vp>0.) then
+            vm = v(i,J-1,k)
+          elseif (vp<0.) then
+            vm = v(i,J,k)
+          else
+            vm = vp
+          endif
         endif
-      endif
 
-      KE(i,j) = ( um*um + vm*vm )*0.5
-    enddo ; enddo
+        KE(i,j) = ( um*um + vm*vm )*0.5
+      enddo ; enddo
+    else
+      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+        ! compute the masking to make sure that inland values are not used
+        third_order_u = (G%mask2dCu(I-2,j) * G%mask2dCu(I-1,j)* &
+                       G%mask2dCu(I,j) * G%mask2dCu(I+1,j))
+        h_min = min((h(i-2,j,k) + h(i-1,j,k)), (h(i-1,j,k) + h(i,j,k)), &
+                       (h(i,j,k) + h(i+1,j,k)), (h(i+1,j,k) + h(i+2,j,k)))
+
+        if (h_min > CS%h_thresh .and. third_order_u == 1) then
+          up = (-u(I-2,j,k) + 7*u(I-1,j,k) + 7*u(I,j,k) - u(I+1,j,k))/12.
+          call UP3_reconstruction(u(I-2,j,k), u(I-1,j,k),&
+                  u(I,j,k), u(I+1,j,k), up, um)
+        else
+          up = (u(I-1,j,k) + u(I,j,k))*0.5
+          if (up>0.) then
+            um = u(I-1,j,k)
+          elseif (up<0.) then
+            um = u(I,j,k)
+          else
+            um = up
+          endif
+        endif
+
+        third_order_v = (G%mask2dCv(i,J-2) * G%mask2dCv(i,J-1)* &
+                       G%mask2dCv(i,J) * G%mask2dCv(i,J+1))
+        h_min = min((h(i,j-2,k) + h(i,j-1,k)),  (h(i,j-1,k) + h(i,j,k)), &
+                    (h(i,j,k) + h(i,j+1,k)), (h(i,j+1,k) + h(i,j+2,k)))
+        if (h_min > CS%h_thresh .and. third_order_v ==1) then
+          vp = (-v(i,J-2,k) + 7*v(i,J-1,k) + 7*v(i,J,k) - v(i,J+1,k))/12.
+          call UP3_reconstruction(v(i,J-2,k), v(i,J-1,k),&
+                  v(i,J,k), v(i,J+1,k), vp, vm)
+        else
+          vp = (v(i,J-1,k) + v(i,J,k))*0.5
+          if (vp>0.) then
+            vm = v(i,J-1,k)
+          elseif (vp<0.) then
+            vm = v(i,J,k)
+          else
+            vm = vp
+          endif
+        endif
+
+        KE(i,j) = ( um*um + vm*vm )*0.5
+      enddo ; enddo
+    endif
   endif
 
   ! Term - d(KE)/dx.
@@ -2008,7 +2039,7 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
   call get_param(param_file, mdl, "KE_SCHEME", tmpstr, &
                  "KE_SCHEME selects the discretization for acceleration "//&
                  "due to the kinetic energy gradient. Valid values are: \n"//&
-                 "\t KE_ARAKAWA, KE_SIMPLE_GUDONOV, KE_GUDONOV", &
+                 "\t KE_ARAKAWA, KE_SIMPLE_GUDONOV, KE_GUDONOV, KE_UP3", &
                  default=KE_ARAKAWA_STRING)
   tmpstr = uppercase(tmpstr)
   select case (tmpstr)
@@ -2028,6 +2059,9 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
             "The flux limiter for UP3 scheme. Valid scheme are: \n"//&
             "\t UP3_NONE, UP3_KOREN, UP3_SUPERBEE", &
                   default=UP3_NONE_STRING)
+    call get_param(param_file, mdl, "KE_USE_LIMITER", CS%KE_use_limiter, &
+            "If true, use Koren limiter for KE_UP3 scheme", &
+                  default=.True.)
     tmpstr = uppercase(tmpstr)
     select case (tmpstr)
       case (UP3_NONE_STRING); CS%UP3_limiter = UP3_NONE
