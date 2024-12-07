@@ -263,7 +263,8 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   real :: u_v, v_u, q_v, q_u ! u_v is the u velocity at v point, v_u is the v velocity at u point
   integer :: seventh_order, fifth_order, third_order, second_order ! Order of accuracy for the WENO calculations
   real :: Ih_sum        ! Sum of inverse thickness at PV points [H-1 ~> m-1]
-  real :: q1, q2, q3    ! PV at three points associated with UP3_PV_ENSRO scheme [H-1 T-1 ~> m-1 s-1]
+  real :: Ih_third, Ih_fifth, Ih_seventh  ! Sum of inverse thickness at at 3rd-, 5th-, and 7th-WENO scheme points
+  real :: q11, q12, q13 ! PV at three points associated with UP3_PV_ENSRO scheme [H-1 T-1 ~> m-1 s-1]
   real :: psi           ! Ratio of PV gradient for the Koren limiter [nondim]
 
 ! To work, the following fields must be set outside of the usual
@@ -792,9 +793,17 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
       if (CS%UP3_limiter == UP3_NONE) then
         do j=js,je ; do I=Isq,Ieq
           v_u = 0.25*G%IdxCu(I,j)*((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
-          call UP3_reconstruction(q(I,J-2), q(I,J-1),&
-                  q(I,J), q(I,J+1), v_u, q_u)
-          CAu(I,j,k) = (q_u) * v_u
+          Ih_sum = Ih_q(I,J-2) + Ih_q(I,J-1) + Ih_q(I,J) + Ih_q(I,J+1)
+          third_order = G%mask2dBu(I,J-2) * G%mask2dBu(I,J-1) * G%mask2dBu(I,J) * G%mask2dBu(I,J+1)
+          if (Ih_sum < (CS%Ih_thresh*third_order)) then
+            call UP3_reconstruction(q(I,J-2), q(I,J-1),&
+                    q(I,J), q(I,J+1), v_u, q_u)
+            CAu(I,j,k) = (q_u) * v_u
+          else
+            CAu(I,j,k) = 0.25 * &
+                 ((q(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
+                  (q(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k)))) * G%IdxCu(I,j) ! Sadourny energy
+          endif
         enddo ; enddo
       elseif (CS%UP3_limiter == UP3_KOREN) then
         do j=js,je ; do I=Isq,Ieq
@@ -802,20 +811,20 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
           if (v_u > 0.) then
             Ih_sum = Ih_q(I,J-2) + Ih_q(I,J-1) + Ih_q(I,J)
             third_order = G%mask2dBu(I,J-2) * G%mask2dBu(I,J-1) * G%mask2dBu(I,J) 
-            q3 = q(I,J-2)
-            q2 = q(I,J-1)
-            q1 = q(I,J)
+            q13 = q(I,J-2)
+            q12 = q(I,J-1)
+            q11 = q(I,J)
           else
             Ih_sum = Ih_q(I,J+1) + Ih_q(I,J) + Ih_q(I,J-1)
             third_order = G%mask2dBu(I,J+1) * G%mask2dBu(I,J) * G%mask2dBu(I,J-1) 
-            q3 = q(I,J+1)
-            q2 = q(I,J)
-            q1 = q(I,J-1)
+            q13 = q(I,J+1)
+            q12 = q(I,J)
+            q11 = q(I,J-1)
           endif
           if (Ih_sum < (CS%Ih_thresh*third_order)) then
-            theta = (q3 - q2)/(q2 - q1 + 1e-20)
+            theta = (q13 - q12)/(q12 - q11 + 1e-20)
             psi = max(0., min(1., 1/3. + 1/6.*theta, theta))  ! Koren limiter
-            q_u = q2 + psi*(q1 - q2)
+            q_u = q12 + psi*(q11 - q12)
             CAu(I,j,k) = (q_u) * v_u
             thetau(I,j,k) = theta
           else
@@ -866,20 +875,24 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         fifth_order   = third_order * G%mask2dCu(I,j-3) * G%mask2dCu(I,j+3)
         seventh_order = fifth_order * G%mask2dCu(I,j-4) * G%mask2dCu(I,j-4)
 
+        Ih_third = Ih_q(I,J-2) + Ih_q(I,J-1) + Ih_q(I,J) + Ih_q(I, J+1)
+        Ih_fifth = Ih_third + Ih_q(I,J-3) + Ih_q(I,J+2)
+        Ih_seventh = Ih_fifth + Ih_q(I,J-4) + Ih_q(I,J+3)
+
         ! compute the masking to make sure that inland values are not used
-        if (seventh_order == 1) then
+        if (Ih_seventh < (CS%Ih_thresh * seventh_order) ) then
             ! all values are valid, we use seventh order reconstruction
             call weno_seven_reconstruction(q(I,J-4), q(I,J-3), q(I,J-2), q(I,J-1), &
                                            q(I,J)  , q(I,J+1), q(I,J+2), q(I,J+3), &
                                            v_u, q_u)
 
-        elseif (fifth_order == 1) then
+        elseif (Ih_fifth < (CS%Ih_thresh * fifth_order)) then
             ! all values are valid, we use fifth order reconstruction
             call weno_five_reconstruction(q(I,J-3), q(I,J-2), q(I,J-1), &
                                           q(I,J),   q(I,J+1), q(I,J+2), &
                                           v_u, q_u)
 
-        elseif (third_order == 1) then
+        elseif (Ih_third < (CS%Ih_thresh * third_order)) then
             ! only the middle values are valid, we use third order reconstruction
             call weno_three_reconstruction(q(I,J-2), q(I,J-1), q(I,J), q(I,J+1), &
                                            v_u, q_u)
@@ -1065,9 +1078,17 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
       if (CS%UP3_limiter == UP3_NONE) then
         do J=Jsq,Jeq ; do i=is,ie
           u_v = 0.25*G%IdyCv(i,J)*((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
-          call UP3_reconstruction(q(I-2,J), q(I-1,J),&
-                  q(I,J), q(I+1,J), u_v, q_v)
-          CAv(i,J,k) = - (q_v) * u_v
+          Ih_sum = Ih_q(I-2,J) + Ih_q(I-1,J) + Ih_q(I,J) + Ih_q(I+1,J)
+          third_order = G%mask2dBu(I-2,J) * G%mask2dBu(I-1,J) * G%mask2dBu(I,J) * G%mask2dBu(I+1,J)
+          if (Ih_sum < (CS%Ih_thresh*third_order)) then
+            call UP3_reconstruction(q(I-2,J), q(I-1,J),&
+                    q(I,J), q(I+1,J), u_v, q_v)
+            CAv(i,J,k) = - (q_v) * u_v
+          else
+            CAv(i,J,k) = - 0.25* &
+                ((q(I-1,J)*(uh(I-1,j,k) + uh(I-1,j+1,k))) + &
+                (q(I,J)*(uh(I,j,k) + uh(I,j+1,k)))) * G%IdyCv(i,J)  ! Sadourny Energy
+          endif
         enddo ; enddo
       elseif (CS%UP3_limiter == UP3_KOREN) then
         do J=Jsq,Jeq ; do i=is,ie
@@ -1075,20 +1096,20 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
           if (u_v > 0.) then
             Ih_sum = Ih_q(I-2,J) + Ih_q(I-1,J) + Ih_q(I,J)
             third_order = G%mask2dBu(I-2,J) * G%mask2dBu(I-1,J) * G%mask2dBu(I,J) 
-            q3 = q(I-2,J)
-            q2 = q(I-1,J)
-            q1 = q(I,J)
+            q13 = q(I-2,J)
+            q12 = q(I-1,J)
+            q11 = q(I,J)
           else
             Ih_sum = Ih_q(I+1,J) + Ih_q(I,J) + Ih_q(I-1,J)
             third_order = G%mask2dBu(I+1,J) * G%mask2dBu(I,J) * G%mask2dBu(I-1,J) 
-            q3 = q(I+1,J)
-            q2 = q(I,J)
-            q1 = q(I-1,J)
+            q13 = q(I+1,J)
+            q12 = q(I,J)
+            q11 = q(I-1,J)
           endif
           if (Ih_sum < (CS%Ih_thresh*third_order)) then
-            theta = (q3 - q2)/(q2 - q1 + 1e-20)
+            theta = (q13 - q12)/(q12 - q11 + 1e-20)
             psi = max(0., min(1., 1/3. + 1/6.*theta, theta))  ! Koren limiter
-            q_v = q2 + psi*(q1 - q2)
+            q_v = q12 + psi*(q11 - q12)
             CAv(i,J,k) = - (q_v) * u_v
             thetav(i,J,k) = theta
           else
@@ -1143,25 +1164,28 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 
         third_order = (G%mask2dCv(i-2,J) * G%mask2dCv(i-1,J) * G%mask2dCv(i,J) * G%mask2dCv(i+1,J) * &
                        G%mask2dCv(i+2,J))
-
         fifth_order   = third_order * G%mask2dCv(i-3,J) * G%mask2dCv(i+3,J)
         seventh_order = fifth_order * G%mask2dCv(i-4,J) * G%mask2dCv(i+4,J)
 
+        Ih_third = Ih_q(I-2,J) + Ih_q(I-1,J) + Ih_q(I,J) + Ih_q(I+1,J)
+        Ih_fifth = Ih_third + Ih_q(I-3,J) + Ih_q(I+2,J)
+        Ih_seventh = Ih_fifth + Ih_q(I-4,J) + Ih_q(I+3,J)
+
         ! compute the masking to make sure that inland values are not used
-        if (seventh_order == 1) then
+        if (Ih_seventh < (CS%Ih_thresh * seventh_order)) then
             ! all values are valid, we use seventh order reconstruction
             call weno_seven_reconstruction(q(I-4,J), q(I-3,J), q(I-2,J), q(I-1,J), &
                                            q(I,J)  , q(I+1,J), q(I+2,J), q(I+3,J), &
                                            u_v, q_v)
 
 
-        elseif (fifth_order == 1) then
+        elseif (Ih_fifth < (CS%Ih_thresh * fifth_order)) then
             ! all values are valid, we use fifth order reconstruction
             call weno_five_reconstruction(q(I-3,J), q(I-2,J), q(I-1,J), &
                                           q(I,J)  , q(I+1,J), q(I+2,J), &
                                           u_v, q_v)
 
-        elseif (third_order == 1) then
+        elseif (Ih_third < (CS%Ih_thresh * third_order)) then
             ! only the middle values are valid, we use third order reconstruction
                 call weno_three_reconstruction(q(I-2,J), q(I-1,J), q(I,J), q(I+1,J), &
                                                u_v, q_v)
@@ -1412,8 +1436,8 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
     ! compute the masking to make sure that inland values are not used
       third_order_u = (G%mask2dCu(I-2,j) * G%mask2dCu(I-1,j)* &
                      G%mask2dCu(I,j) * G%mask2dCu(I+1,j))
-      h_min = min((h(i-2,j,k) + h(i-1,j,k)) + (h(i-1,j,k) + h(i,j,k)) + &
-                     (h(i,j,k) + h(i+1,j,k)) + (h(i+1,j,k) + h(i+2,j,k)))
+      h_min = min((h(i-2,j,k) + h(i-1,j,k)), (h(i-1,j,k) + h(i,j,k)), &
+                     (h(i,j,k) + h(i+1,j,k)), (h(i+1,j,k) + h(i+2,j,k)))
 
       if (h_min > CS%h_thresh .and. third_order_u == 1) then
         up = (-u(I-2,j,k) + 7*u(I-1,j,k) + 7*u(I,j,k) - u(I+1,j,k))/12.
@@ -1440,8 +1464,8 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
 
       third_order_v = (G%mask2dCv(i,J-2) * G%mask2dCv(i,J-1)* &
                      G%mask2dCv(i,J) * G%mask2dCv(i,J+1))
-      h_min = min((h(i,j-2,k) + h(i,j-1,k)) + h(i,j-1,k) + h(i,j,k) + &
-                  (h(i,j,k) + h(i,j+1,k)) + (h(i,j+1,k) + h(i,j+2,k)))
+      h_min = min((h(i,j-2,k) + h(i,j-1,k)),  (h(i,j-1,k) + h(i,j,k)), &
+                  (h(i,j,k) + h(i,j+1,k)), (h(i,j+1,k) + h(i,j+2,k)))
       if (h_min > CS%h_thresh .and. third_order_v ==1) then
         vp = (-v(i,J-2,k) + 7*v(i,J-1,k) + 7*v(i,J,k) - v(i,J+1,k))/12.
         if (CS%UP3_limiter == UP3_NONE) then
