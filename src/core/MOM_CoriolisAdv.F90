@@ -81,6 +81,7 @@ type, public :: CoriolisAdv_CS ; private
                              !! SADOURNY75_ENERGY.
   logical, public :: USE_WENO !< If WENOVI7TH_PV_ENSTRO and WENOVI7TH_ENSTRO schemes are used,
                               !! this will be passed to RK2 modules to enlarge the halo update size.
+  logical :: weno_velocity_smooth !< If true, use velocity to compute the smoothness indicator for WENO
   real    :: h_thresh         !< The thickness threshold below which the order of Coriolis scheme will be reduced.
   real    :: Ih_thresh       !< Threshold for the inverse of thickness to detect thin layers [H-1 ~> m-1]
   type(time_type), pointer :: Time !< A pointer to the ocean model's clock.
@@ -139,9 +140,11 @@ character*(20), parameter :: KE_UP3_STRING = "KE_UP3"
 integer, parameter :: UP3_NONE          = 23
 integer, parameter :: UP3_KOREN         = 24
 integer, parameter :: UP3_SUPERBEE      = 25
+integer, parameter :: UP3_KOREN_VELOCITY = 26
 character*(20), parameter :: UP3_NONE_STRING = "UP3_NONE"
 character*(20), parameter :: UP3_KOREN_STRING = "UP3_KOREN"
 character*(20), parameter :: UP3_SUPERBEE_STRING = "UP3_SUPERBEE"
+character*(20), parameter :: UP3_KOREN_VELOCITY_STRING = "UP3_KOREN_VELOCITY"
 !>@}
 !>@{ Enumeration values for PV_Adv_Scheme
 integer, parameter :: PV_ADV_CENTERED   = 21
@@ -267,6 +270,8 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   real :: Ih_third, Ih_fifth, Ih_seventh  ! Sum of inverse thickness at at 3rd-, 5th-, and 7th-WENO scheme points
   real :: q11, q12, q13 ! PV at three points associated with UP3_PV_ENSRO scheme [H-1 T-1 ~> m-1 s-1]
   real :: psi           ! Ratio of PV gradient for the Koren limiter [nondim]
+  real :: u_q1, u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_q8 ! Zonal velocity at PV points [L T-1 ~> m s-1]
+  real :: v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8 ! Meridional velocity at PV points [L T-1 ~> m s-1]
 
 ! To work, the following fields must be set outside of the usual
 ! is to ie range before this subroutine is called:
@@ -806,6 +811,66 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
                   (q(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k)))) * G%IdxCu(I,j) ! Sadourny energy
           endif
         enddo ; enddo
+      elseif (CS%UP3_limiter == UP3_KOREN_VELOCITY) then
+        do j=js,je ; do I=Isq,Ieq
+          v_u = 0.25*G%IdxCu(I,j)*((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
+!          Ih_sum = Ih_q(I,J-2) + Ih_q(I,J-1) + Ih_q(I,J) + Ih_q(I,J+1)
+!          third_order = G%mask2dBu(I,J-2) * G%mask2dBu(I,J-1) * G%mask2dBu(I,J) * G%mask2dBu(I,J+1)
+!          if (Ih_sum < (CS%Ih_thresh*third_order)) then
+!            u_q1 = 0.5 * (u(I,j-2,k) + u(I,j-1,k))
+!            u_q2 = 0.5 * (u(I,j-1,k) + u(I,j,k))
+!            u_q3 = 0.5 * (u(I,j,k)   + u(I,j+1,k))
+!            u_q4 = 0.5 * (u(I,j+1,k) + u(I,j+2,k))
+!            call UP3_Koren_velocity_limiter_reconstruction(q(I,J-2), q(I,J-1),&
+!                    q(I,J), q(I,J+1), u_q1, u_q2, u_q3, u_q4, v_u, q_u, theta)
+!            CAu(I,j,k) = (q_u) * v_u
+!            thetau(I,j,k) = theta
+!          else
+!            CAu(I,j,k) = 0.25 * &
+!                 ((q(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
+!                  (q(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k)))) * G%IdxCu(I,j) ! Sadourny energy
+!            thetau(I,j,k) = 0.
+!          endif
+          if (v_u > 0.) then
+            Ih_sum = Ih_q(I,J-2) + Ih_q(I,J-1) + Ih_q(I,J)
+            third_order = G%mask2dBu(I,J-2) * G%mask2dBu(I,J-1) * G%mask2dBu(I,J) 
+            q13 = q(I,J-2)
+            q12 = q(I,J-1)
+            q11 = q(I,J)
+            u_q3 = 0.5 * (u(I,j-2,k) + u(I,j-1,k))
+            u_q2 = 0.5 * (u(I,j-1,k) + u(I,j,k))
+            u_q1 = 0.5 * (u(I,j,k)   + u(I,j+1,k))
+          else
+            Ih_sum = Ih_q(I,J+1) + Ih_q(I,J) + Ih_q(I,J-1)
+            third_order = G%mask2dBu(I,J+1) * G%mask2dBu(I,J) * G%mask2dBu(I,J-1) 
+            q13 = q(I,J+1)
+            q12 = q(I,J)
+            q11 = q(I,J-1)
+            u_q3 = 0.5 * (u(I,j+1,k) + u(I,j+2,k))
+            u_q2 = 0.5 * (u(I,j,k)   + u(I,j+1,k))
+            u_q1 = 0.5 * (u(I,j-1,k) + u(I,j,k))
+          endif
+          if (Ih_sum < (CS%Ih_thresh*third_order)) then
+            theta = (u_q3 - u_q2)/(u_q2 - u_q1 + 1e-20)
+            psi = max(0., min(1., 1/3. + 1/6.*theta, theta))  ! Koren limiter
+            if (theta >= 0.4 .and. theta <= 4.0) then
+              q_u = (2.0*q11 + 5.0*q12 - q13)/6.0
+            elseif (theta > 0.0 .and. theta < 0.4) then
+              q_u = q12*2 - q13
+            elseif (theta <= 0.0) then
+              q_u = q12
+            else
+              q_u = q11
+            endif
+            CAu(I,j,k) = (q_u) * v_u
+            thetau(I,j,k) = theta
+          else
+            CAu(I,j,k) = 0.25 * &
+                 ((q(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
+                  (q(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k)))) * G%IdxCu(I,j) ! Sadourny energy
+            thetau(I,j,k) = 0.
+          endif
+        enddo ; enddo
       elseif (CS%UP3_limiter == UP3_KOREN) then
         do j=js,je ; do I=Isq,Ieq
           v_u = 0.25*G%IdxCu(I,j)*((vh(i+1,J,k) + vh(i,J,k)) + (vh(i,J-1,k) + vh(i+1,J-1,k)))
@@ -874,29 +939,40 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
                        G%mask2dCu(I,j+1) * G%mask2dCu(I,j+2))
 
         fifth_order   = third_order * G%mask2dCu(I,j-3) * G%mask2dCu(I,j+3)
-        seventh_order = fifth_order * G%mask2dCu(I,j-4) * G%mask2dCu(I,j-4)
+        seventh_order = fifth_order * G%mask2dCu(I,j-4) * G%mask2dCu(I,j+4)
 
         Ih_third = Ih_q(I,J-2) + Ih_q(I,J-1) + Ih_q(I,J) + Ih_q(I, J+1)
         Ih_fifth = Ih_third + Ih_q(I,J-3) + Ih_q(I,J+2)
         Ih_seventh = Ih_fifth + Ih_q(I,J-4) + Ih_q(I,J+3)
 
+        u_q1 = (u(I,j-4,k) + u(I,j-3,k)) * 0.5
+        u_q2 = (u(I,j-3,k) + u(I,j-2,k)) * 0.5
+        u_q3 = (u(I,j-2,k) + u(I,j-1,k)) * 0.5
+        u_q4 = (u(I,j-1,k) + u(I,j  ,k)) * 0.5
+        u_q5 = (u(I,j  ,k) + u(I,j+1,k)) * 0.5
+        u_q6 = (u(I,j+1,k) + u(I,j+2,k)) * 0.5
+        u_q7 = (u(I,j+2,k) + u(I,j+3,k)) * 0.5
+        u_q8 = (u(I,j+3,k) + u(I,j+4,k)) * 0.5
         ! compute the masking to make sure that inland values are not used
         if (Ih_seventh < (CS%Ih_thresh * seventh_order) ) then
             ! all values are valid, we use seventh order reconstruction
             call weno_seven_reconstruction(q(I,J-4), q(I,J-3), q(I,J-2), q(I,J-1), &
                                            q(I,J)  , q(I,J+1), q(I,J+2), q(I,J+3), &
-                                           v_u, q_u)
+                                           u_q1, u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_q8, &
+                                           v_u, q_u, cs%weno_velocity_smooth)
 
         elseif (Ih_fifth < (CS%Ih_thresh * fifth_order)) then
             ! all values are valid, we use fifth order reconstruction
             call weno_five_reconstruction(q(I,J-3), q(I,J-2), q(I,J-1), &
                                           q(I,J),   q(I,J+1), q(I,J+2), &
-                                          v_u, q_u)
+                                          u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, &
+                                          v_u, q_u, CS%weno_velocity_smooth)
 
         elseif (Ih_third < (CS%Ih_thresh * third_order)) then
             ! only the middle values are valid, we use third order reconstruction
             call weno_three_reconstruction(q(I,J-2), q(I,J-1), q(I,J), q(I,J+1), &
-                                           v_u, q_u)
+                                           u_q3, u_q4, u_q5, u_q6, &
+                                           v_u, q_u, CS%weno_velocity_smooth)
         else ! Upwind first order
             if (v_u>0.) then
                 q_u = q(I,J-1)
@@ -922,18 +998,18 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
             ! all values are valid, we use seventh order reconstruction
             call weno_seven_reconstruction(abs_vort(I,J-4),abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), &
                                            abs_vort(I,J)  ,abs_vort(I,J+1),abs_vort(I,J+2),abs_vort(I,J+3), &
-                                           v_u, q_u)
+                                           1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, v_u, q_u, .false.)
 
         elseif (fifth_order == 1) then
             ! all values are valid, we use fifth order reconstruction
             call weno_five_reconstruction(abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), &
                                           abs_vort(I,J),  abs_vort(I,J+1),abs_vort(I,J+2), &
-                                          v_u, q_u)
+                                          1.0, 1.0, 1.0, 1.0, 1.0, 1.0, v_u, q_u, .false.)
 
         elseif (third_order == 1) then
             ! only the middle values are valid, we use third order reconstruction
             call weno_three_reconstruction(abs_vort(I,J-2),abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1), &
-                                           v_u, q_u)
+                                           1.0, 1.0, 1.0, 1.0, v_u, q_u, .false.)
         else ! Upwind first order
             if (v_u>0.) then
                 q_u = abs_vort(I,J-1)
@@ -1091,6 +1167,65 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
                 (q(I,J)*(uh(I,j,k) + uh(I,j+1,k)))) * G%IdyCv(i,J)  ! Sadourny Energy
           endif
         enddo ; enddo
+      elseif (CS%UP3_limiter == UP3_KOREN_VELOCITY) then
+        do J=Jsq,Jeq ; do i=is,ie
+          u_v = 0.25*G%IdyCv(i,J)*((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
+!          Ih_sum = Ih_q(I-2,J) + Ih_q(I-1,J) + Ih_q(I,J) + Ih_q(I+1,J)
+!          third_order = G%mask2dBu(I-2,J) * G%mask2dBu(I-1,J) * G%mask2dBu(I,J) * G%mask2dBu(I+1,J)
+!          if (Ih_sum < (CS%Ih_thresh*third_order)) then
+!            v_q1 = 0.5 * (v(i-2,J,k) + v(i-1,J,k))
+!            v_q2 = 0.5 * (v(i-1,J,k) + v(i,J,k))
+!            v_q3 = 0.5 * (v(i,J,k) + v(i+1,J,k))
+!            v_q4 = 0.5 * (v(i+1,J,k) + v(i+2,J,k))
+!            call UP3_Koren_velocity_limiter_reconstruction(q(I-2,J), q(I-1,J),&
+!                    q(I,J), q(I+1,J), v_q1, v_q2, v_q3, v_q4, u_v, q_v, theta)
+!            CAv(i,J,k) = - (q_v) * u_v
+!            thetav(i,J,k) = theta
+!          else
+!            CAv(i,J,k) = - 0.25* &
+!                ((q(I-1,J)*(uh(I-1,j,k) + uh(I-1,j+1,k))) + &
+!                (q(I,J)*(uh(I,j,k) + uh(I,j+1,k)))) * G%IdyCv(i,J)  ! Sadourny Energy
+!            thetav(i,J,k) = 0.
+!          endif
+          if (u_v > 0.) then
+            Ih_sum = Ih_q(I-2,J) + Ih_q(I-1,J) + Ih_q(I,J)
+            third_order = G%mask2dBu(I-2,J) * G%mask2dBu(I-1,J) * G%mask2dBu(I,J) 
+            q13 = q(I-2,J)
+            q12 = q(I-1,J)
+            q11 = q(I,J)
+            v_q3 = 0.5 * (v(i-2,J,k) + v(i-1,J,k))
+            v_q2 = 0.5 * (v(i-1,J,k) + v(i,J,k))
+            v_q1 = 0.5 * (v(i,J,k) + v(i+1,J,k))
+          else
+            Ih_sum = Ih_q(I+1,J) + Ih_q(I,J) + Ih_q(I-1,J)
+            third_order = G%mask2dBu(I+1,J) * G%mask2dBu(I,J) * G%mask2dBu(I-1,J) 
+            q13 = q(I+1,J)
+            q12 = q(I,J)
+            q11 = q(I-1,J)
+            v_q3 = 0.5 * (v(i+1,J,k) + v(i+2,J,k))
+            v_q2 = 0.5 * (v(i,J,k) + v(i+1,J,k))
+            v_q1 = 0.5 * (v(i-1,J,k) + v(i,J,k))
+          endif
+          if (Ih_sum < (CS%Ih_thresh*third_order)) then
+            theta = (v_q3 - v_q2)/(v_q2 - v_q1 + 1e-20)
+            if (theta >= 0.4 .and. theta <= 4.0) then
+              q_v = (2.0*q11 + 5.0*q12 - q13)/6.0
+            elseif (theta > 0.0 .and. theta < 0.4) then
+              q_v = q12*2 - q13
+            elseif (theta <= 0.0) then
+              q_v = q12
+            else
+              q_v = q11
+            endif
+            CAv(i,J,k) = - (q_v) * u_v
+            thetav(i,J,k) = theta
+          else
+            CAv(i,J,k) = - 0.25* &
+                ((q(I-1,J)*(uh(I-1,j,k) + uh(I-1,j+1,k))) + &
+                (q(I,J)*(uh(I,j,k) + uh(I,j+1,k)))) * G%IdyCv(i,J)  ! Sadourny Energy
+            thetav(i,J,k) = 0.
+          endif
+        enddo ; enddo
       elseif (CS%UP3_limiter == UP3_KOREN) then
         do J=Jsq,Jeq ; do i=is,ie
           u_v = 0.25*G%IdyCv(i,J)*((uh(I-1,j,k) + uh(I-1,j+1,k)) + (uh(I,j,k) + uh(I,j+1,k)))
@@ -1172,24 +1307,36 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         Ih_fifth = Ih_third + Ih_q(I-3,J) + Ih_q(I+2,J)
         Ih_seventh = Ih_fifth + Ih_q(I-4,J) + Ih_q(I+3,J)
 
+        v_q1 = (v(i-4,J,k) + v(i-3,J,k)) * 0.5
+        v_q2 = (v(i-3,J,k) + v(i-2,J,k)) * 0.5
+        v_q3 = (v(i-2,J,k) + v(i-1,J,k)) * 0.5
+        v_q4 = (v(i-1,J,k) + v(i  ,J,k)) * 0.5
+        v_q5 = (v(i  ,J,k) + v(i+1,J,k)) * 0.5
+        v_q6 = (v(i+1,J,k) + v(i+2,J,k)) * 0.5
+        v_q7 = (v(i+2,J,k) + v(i+3,J,k)) * 0.5
+        v_q8 = (v(i+3,J,k) + v(i+4,J,k)) * 0.5
+
         ! compute the masking to make sure that inland values are not used
         if (Ih_seventh < (CS%Ih_thresh * seventh_order)) then
             ! all values are valid, we use seventh order reconstruction
             call weno_seven_reconstruction(q(I-4,J), q(I-3,J), q(I-2,J), q(I-1,J), &
                                            q(I,J)  , q(I+1,J), q(I+2,J), q(I+3,J), &
-                                           u_v, q_v)
+                                           v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8, &
+                                           u_v, q_v, CS%weno_velocity_smooth)
 
 
         elseif (Ih_fifth < (CS%Ih_thresh * fifth_order)) then
             ! all values are valid, we use fifth order reconstruction
             call weno_five_reconstruction(q(I-3,J), q(I-2,J), q(I-1,J), &
                                           q(I,J)  , q(I+1,J), q(I+2,J), &
-                                          u_v, q_v)
+                                          v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, &
+                                          u_v, q_v, CS%weno_velocity_smooth)
 
         elseif (Ih_third < (CS%Ih_thresh * third_order)) then
             ! only the middle values are valid, we use third order reconstruction
                 call weno_three_reconstruction(q(I-2,J), q(I-1,J), q(I,J), q(I+1,J), &
-                                               u_v, q_v)
+                                               v_q3, v_q4, v_q5, v_q6, &
+                                               u_v, q_v, CS%weno_velocity_smooth)
         else ! Upwind first order!
             if (u_v>0.) then
                 q_v = q(I-1,J)
@@ -1215,7 +1362,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
             ! all values are valid, we use seventh order reconstruction
             call weno_seven_reconstruction(abs_vort(I-4,J),abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), &
                                            abs_vort(I,J)  ,abs_vort(I+1,J),abs_vort(I+2,J),abs_vort(I+3,J), &
-                                           u_v, q_v)
+                                           1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, u_v, q_v, .false.)
 
             ! all values are valid, we use seventh order reconstruction
 
@@ -1223,12 +1370,12 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
             ! all values are valid, we use fifth order reconstruction
             call weno_five_reconstruction(abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), &
                                           abs_vort(I,J),abs_vort(I+1,J),abs_vort(I+2,J), &
-                                          u_v, q_v)
+                                          1.0, 1.0, 1.0, 1.0, 1.0, 1.0, u_v, q_v, .false.)
 
         elseif (third_order == 1) then
             ! only the middle values are valid, we use third order reconstruction
                 call weno_three_reconstruction(abs_vort(I-2,J),abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J), &
-                                               u_v, q_v)
+                                               1.0, 1.0, 1.0, 1.0, u_v, q_v, .false.)
         else ! Upwind first order!
             if (u_v>0.) then
                 q_v = abs_vort(I-1,J)
@@ -1604,6 +1751,43 @@ subroutine UP3_Koren_limiter_reconstruction(q1,q2,q3,q4,u,qr,theta)
 end subroutine UP3_Koren_limiter_reconstruction
 
 !> Reconstruct the variable (e.g., PV, vorticity) onto the velocity point
+!!using a third-order upwind scheme with the Koren flux limiter
+subroutine UP3_Koren_velocity_limiter_reconstruction(q1,q2,q3,q4,u1,u2,u3,u4,u,qr,theta)
+  real, intent(in)    :: q1, q2, q3, q4   !< Values on points i-2, i-1, i, i+1
+  real, intent(in)    :: u1, u2, u3, u4   !< Velocities on points i-2, i-1, i, i+1
+  real, intent(in)    :: u                !< Velocity or thickness flux on point i-1/2
+                                          !! [L T-1 ~> m s-1] or [L2 T-1 ~> m2 s-1]
+  real, intent(inout) :: qr               !< Reconstructin on point i-1/2
+  real, intent(inout) :: theta       ! Ratio of gradient
+  real                :: psi         ! Ratio of gradient
+
+  if (u>0.) then
+    theta = (u2 - u1)/(u3 - u2 + 1e-20)
+    if (theta >= 0.4 .and. theta <= 4.0) then
+      qr = (-q1 + 5.0*q2 + 2.0*q3)/6.0
+    elseif (theta > 0.0 .and. theta < 0.4) then
+      qr = q2*2.0 - q1
+    elseif (theta <= 0.0) then
+      qr = q2
+    else
+      qr = q3
+    endif
+  else
+    theta = (u4 - u3)/(u3 - u2 + 1e-20)
+    if (theta >= 0.4 .and. theta <= 4.0) then
+      qr = (2*q2 + 5*q3 - q4)/6.0
+    elseif (theta > 0.0 .and. theta < 0.4) then
+      qr = q3*2 - q4
+    elseif (theta <= 0.0) then
+      qr = q3
+    else
+      qr = q2
+    endif
+  endif
+
+end subroutine UP3_Koren_velocity_limiter_reconstruction
+
+!> Reconstruct the variable (e.g., PV, vorticity) onto the velocity point
 !!using a third-order upwind scheme with the Superbee flux limiter
 subroutine UP3_Superbee_limiter_reconstruction(q1,q2,q3,q4,u,qr)
   real, intent(in)    :: q1, q2, q3, q4   !< Values on points i-2, i-1, i, i+1
@@ -1625,11 +1809,13 @@ subroutine UP3_Superbee_limiter_reconstruction(q1,q2,q3,q4,u,qr)
 end subroutine UP3_Superbee_limiter_reconstruction
 
 !> Reconstruct the variable (e.g., PV, vorticity) onto the velocity point using a third-order WENO scheme
-subroutine weno_three_reconstruction(q1, q2, q3, q4, u, qr)
+subroutine weno_three_reconstruction(q1, q2, q3, q4, u1, u2, u3, u4, u, qr, velocity_smoothing)
     real, intent(in)    :: q1, q2, q3, q4 !< Variable values on points i-2, i-1, i, i+1
+    real, optional, intent(in)    :: u1, u2, u3, u4 !< Velocity values on points i-2, i-1, i, i+1
     real, intent(in)    :: u              !< Velocity or thickness flux on point i-1/2
                                           !! [L T-1 ~> m s-1] or [L2 T-1 ~> m2 s-1]
     real, intent(inout) :: qr             !< Reconstructin on point i-1/2
+    logical, optional, intent(in) :: velocity_smoothing !< If true, use velocity to compute smoothness indicator
     real :: c0, c1                        ! Temporary variables
     real :: b0, b1                        ! Temporary variables [nondim]
     real :: tau, w0, w1                   ! Temporary variables [nondim]
@@ -1638,13 +1824,23 @@ subroutine weno_three_reconstruction(q1, q2, q3, q4, u, qr)
     if (u>0.) then
       call weno_three_reconstruction_0(q2, q3, c0)
       call weno_three_reconstruction_1(q1, q2, c1)
-      call weno_three_weight(q2, q3, b0)
-      call weno_three_weight(q1, q2, b1)
+      if (velocity_smoothing) then
+        call weno_three_weight(u2, u3, b0)
+        call weno_three_weight(u1, u2, b1)
+      else
+        call weno_three_weight(q2, q3, b0)
+        call weno_three_weight(q1, q2, b1)
+      endif
     else
       call weno_three_reconstruction_0(q3, q2, c0)
       call weno_three_reconstruction_1(q4, q3, c1)
-      call weno_three_weight(q3, q2, b0)
-      call weno_three_weight(q4, q3, b1)
+      if (velocity_smoothing) then
+        call weno_three_weight(u3, u2, b0)
+        call weno_three_weight(u4, u3, b1)
+      else
+        call weno_three_weight(q3, q2, b0)
+        call weno_three_weight(q4, q3, b1)
+      endif
     endif
 
     tau = abs(b0-b1)
@@ -1687,10 +1883,12 @@ subroutine weno_three_reconstruction_1(q0, q1, w0)
 end subroutine weno_three_reconstruction_1
 
 !> Reconstruct the variable (e.g., PV, vorticity) onto the velocity point using a fifth-order WENO scheme
-subroutine weno_five_reconstruction(q1, q2, q3, q4, q5, q6, u, qr)
+subroutine weno_five_reconstruction(q1, q2, q3, q4, q5, q6, u1, u2, u3, u4, u5, u6, u, qr, velocity_smoothing)
     real, intent(in)    :: q1, q2, q3, q4, q5, q6 !< Variable values on points i-3, i-2, i-1, i, i+1, i+2
+    real, optional, intent(in)    :: u1, u2, u3, u4, u5, u6 !< Velocity values on points i-3, i-2, i-1, i, i+1, i+2
     real, intent(in)    :: u                      !< Velocity or thickness flux on point i-1/2
                                                   !! [L T-1 ~> m s-1] or [L2 T-1 ~> m2 s-1]
+    logical, optional, intent(in) :: velocity_smoothing     !< If ture, use velocity to compute the smoothness indicator
     real, intent(inout) :: qr                     !< Reconstructin on point i-1/2
     real :: c0, c1, c2                            ! Temporary variables
     real :: b0, b1, b2                            ! Temporary variables [nondim]
@@ -1701,16 +1899,28 @@ subroutine weno_five_reconstruction(q1, q2, q3, q4, q5, q6, u, qr)
       call weno_five_reconstruction_0(q3, q4, q5, c0)
       call weno_five_reconstruction_1(q2, q3, q4, c1)
       call weno_five_reconstruction_2(q1, q2, q3, c2)
-      call weno_five_weight_0(q3, q4, q5, b0)
-      call weno_five_weight_1(q2, q3, q4, b1)
-      call weno_five_weight_2(q1, q2, q3, b2)
+      if (velocity_smoothing) then
+        call weno_five_weight_0(u3, u4, u5, b0)
+        call weno_five_weight_1(u2, u3, u4, b1)
+        call weno_five_weight_2(u1, u2, u3, b2)
+      else
+        call weno_five_weight_0(q3, q4, q5, b0)
+        call weno_five_weight_1(q2, q3, q4, b1)
+        call weno_five_weight_2(q1, q2, q3, b2)
+      endif
     else
       call weno_five_reconstruction_0(q4, q3, q2, c0)
       call weno_five_reconstruction_1(q5, q4, q3, c1)
       call weno_five_reconstruction_2(q6, q5, q4, c2)
-      call weno_five_weight_0(q4, q3, q2, b0)
-      call weno_five_weight_1(q5, q4, q3, b1)
-      call weno_five_weight_2(q6, q5, q4, b2)
+      if (velocity_smoothing) then
+        call weno_five_weight_0(u4, u3, u2, b0)
+        call weno_five_weight_1(u5, u4, u3, b1)
+        call weno_five_weight_2(u6, u5, u4, b2)
+      else
+        call weno_five_weight_0(q4, q3, q2, b0)
+        call weno_five_weight_1(q5, q4, q3, b1)
+        call weno_five_weight_2(q6, q5, q4, b2)
+      endif
     endif
 
     tau = abs(b0 - b2)
@@ -1783,11 +1993,15 @@ end subroutine weno_five_reconstruction_2
 
 !> Reconstruct the variable (e.g., PV, vorticity) onto the velocity point using a seventh-order WENO scheme
 subroutine weno_seven_reconstruction(q1, q2, q3, q4, q5, q6, q7, q8, &
-                                     u, qr)
+                                     u1, u2, u3, u4, u5, u6, u7, u8, &
+                                     u, qr, velocity_smoothing)
   real, intent(in)    :: q1, q2, q3, q4, q5, q6, q7, q8
   !< Variable values on points i-4, i-3, i-2, i-1, i, i+1, i+2, i+3
+  real, optional, intent(in)    :: u1, u2, u3, u4, u5, u6, u7, u8
+  !< Velocity values on points i-4, i-3, i-2, i-1, i, i+1, i+2, i+3
   real, intent(in)    :: u    !< Velocity or thickness flux on point i-1/2
                               !! [L T-1 ~> m s-1] or [L2 T-1 ~> m2 s-1]
+  logical, optional, intent(in) :: velocity_smoothing !< If true, use velocity to compute the smoothness indicator
   real, intent(inout) :: qr   !< Reconstructin on point i-1/2
   real :: c0, c1, c2, c3      ! Temporary variables
   real :: b0, b1, b2, b3      ! Temporary variables [nondim]
@@ -1799,19 +2013,33 @@ subroutine weno_seven_reconstruction(q1, q2, q3, q4, q5, q6, q7, q8, &
     call weno_seven_reconstruction_1(q3, q4, q5, q6, c1)
     call weno_seven_reconstruction_2(q2, q3, q4, q5, c2)
     call weno_seven_reconstruction_3(q1, q2, q3, q4, c3)
-    call weno_seven_weight_0(q4, q5, q6, q7, b0)
-    call weno_seven_weight_1(q3, q4, q5, q6, b1)
-    call weno_seven_weight_2(q2, q3, q4, q5, b2)
-    call weno_seven_weight_3(q1, q2, q3, q4, b3)
+    if (velocity_smoothing) then
+      call weno_seven_weight_0(u4, u5, u6, u7, b0)
+      call weno_seven_weight_1(u3, u4, u5, u6, b1)
+      call weno_seven_weight_2(u2, u3, u4, u5, b2)
+      call weno_seven_weight_3(u1, u2, u3, u4, b3)
+    else
+      call weno_seven_weight_0(q4, q5, q6, q7, b0)
+      call weno_seven_weight_1(q3, q4, q5, q6, b1)
+      call weno_seven_weight_2(q2, q3, q4, q5, b2)
+      call weno_seven_weight_3(q1, q2, q3, q4, b3)
+    endif
   else
     call weno_seven_reconstruction_0(q5, q4, q3, q2, c0)
     call weno_seven_reconstruction_1(q6, q5, q4, q3, c1)
     call weno_seven_reconstruction_2(q7, q6, q5, q4, c2)
     call weno_seven_reconstruction_3(q8, q7, q6, q5, c3)
-    call weno_seven_weight_0(q5, q4, q3, q2, b0)
-    call weno_seven_weight_1(q6, q5, q4, q3, b1)
-    call weno_seven_weight_2(q7, q6, q5, q4, b2)
-    call weno_seven_weight_3(q8, q7, q6, q5, b3)
+    if (velocity_smoothing) then
+      call weno_seven_weight_0(u5, u4, u3, u2, b0)
+      call weno_seven_weight_1(u6, u5, u4, u3, b1)
+      call weno_seven_weight_2(u7, u6, u5, u4, b2)
+      call weno_seven_weight_3(u8, u7, u6, u5, b3)
+    else
+      call weno_seven_weight_0(q5, q4, q3, q2, b0)
+      call weno_seven_weight_1(q6, q5, q4, q3, b1)
+      call weno_seven_weight_2(q7, q6, q5, q4, b2)
+      call weno_seven_weight_3(q8, q7, q6, q5, b3)
+    endif
   endif
 
   tau = abs(b0 + 3 * b1 - 3 * b2 - b3)
@@ -1997,6 +2225,9 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
   CS%USE_WENO = .false.
   if (CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO .or. CS%Coriolis_Scheme == wenovi7th_ENSTRO) then
     CS%USE_WENO = .true.
+    call get_param(param_file, mdl, "WENO_VELOCITY_SMOOTH", CS%weno_velocity_smooth, &
+            "If true, use velocity to compute weighting for WENO. ", &
+                  default=.false.)
   endif
 
   if (CS%Coriolis_Scheme == AL_BLEND) then
@@ -2057,7 +2288,7 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
       CS%KE_Scheme == KE_UP3) then
     call get_param(param_file, mdl, "UP3_LIMITER", tmpstr, &
             "The flux limiter for UP3 scheme. Valid scheme are: \n"//&
-            "\t UP3_NONE, UP3_KOREN, UP3_SUPERBEE", &
+            "\t UP3_NONE, UP3_KOREN, UP3_KOREN_VELOCITY, UP3_SUPERBEE", &
                   default=UP3_NONE_STRING)
     call get_param(param_file, mdl, "KE_USE_LIMITER", CS%KE_use_limiter, &
             "If true, use Koren limiter for KE_UP3 scheme", &
@@ -2066,6 +2297,7 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
     select case (tmpstr)
       case (UP3_NONE_STRING); CS%UP3_limiter = UP3_NONE
       case (UP3_KOREN_STRING); CS%UP3_limiter = UP3_KOREN
+      case (UP3_KOREN_VELOCITY_STRING); CS%UP3_limiter = UP3_KOREN_VELOCITY
       case (UP3_SUPERBEE_STRING); CS%UP3_limiter = UP3_SUPERBEE
       case default
         call MOM_mesg('CoriolisAdv_init: UP3_limiter ="'//trim(tmpstr)//'"', 0)
