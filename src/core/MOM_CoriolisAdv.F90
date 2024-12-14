@@ -272,6 +272,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   real :: psi           ! Ratio of PV gradient for the Koren limiter [nondim]
   real :: u_q1, u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_q8 ! Zonal velocity at PV points [L T-1 ~> m s-1]
   real :: v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8 ! Meridional velocity at PV points [L T-1 ~> m s-1]
+  integer :: stencil    ! Stencil size of WENO scheme
 
 ! To work, the following fields must be set outside of the usual
 ! is to ie range before this subroutine is called:
@@ -290,10 +291,11 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 
   if (CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO .or. &
       CS%Coriolis_Scheme == wenovi7th_ENSTRO) then
-    Isq = Isq - 3
-    Ieq = Ieq + 2
-    Jsq = Jsq - 3
-    Jeq = Jeq + 2
+    stencil = 4
+    Isq = Isq - stencil + 1
+    Ieq = Ieq + stencil - 2
+    Jsq = Jsq - stencil + 1
+    Jeq = Jeq + stencil - 2
   endif
   !$OMP parallel do default(private) shared(Isq,Ieq,Jsq,Jeq,G,Area_h)
   do j=Jsq-1,Jeq+2 ; do I=Isq-1,Ieq+2
@@ -328,10 +330,10 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 
   if (CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO .or. &
         CS%Coriolis_Scheme == wenovi7th_ENSTRO) then
-    Isq = Isq + 3
-    Ieq = Ieq - 2
-    Jsq = Jsq + 3
-    Jeq = Jeq - 2
+    Isq = Isq + stencil - 1
+    Ieq = Ieq - stencil + 2
+    Jsq = Jsq + stencil - 1
+    Jeq = Jeq - stencil + 2
   endif
 
   Stokes_VF = .false.
@@ -346,10 +348,10 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 
     if (CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO .or. &
         CS%Coriolis_Scheme == wenovi7th_ENSTRO) then
-      Isq = Isq - 3
-      Ieq = Ieq + 2
-      Jsq = Jsq - 3
-      Jeq = Jeq + 2
+      Isq = Isq - stencil + 1
+      Ieq = Ieq + stencil - 2
+      Jsq = Jsq - stencil + 1
+      Jeq = Jeq + stencil - 2
     endif
     ! Here the second order accurate layer potential vorticities, q,
     ! are calculated.  hq is  second order accurate in space.  Relative
@@ -568,10 +570,10 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 
     if (CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO .or. &
         CS%Coriolis_Scheme == wenovi7th_ENSTRO) then
-      Isq = Isq + 3
-      Ieq = Ieq - 2
-      Jsq = Jsq + 3
-      Jeq = Jeq - 2
+      Isq = Isq + stencil - 1
+      Ieq = Ieq - stencil + 2
+      Jsq = Jsq + stencil - 1
+      Jeq = Jeq - stencil + 2
     endif
 
     if (CS%id_rv > 0) then
@@ -945,14 +947,14 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
         Ih_fifth = Ih_third + Ih_q(I,J-3) + Ih_q(I,J+2)
         Ih_seventh = Ih_fifth + Ih_q(I,J-4) + Ih_q(I,J+3)
 
-        u_q1 = (u(I,j-4,k) + u(I,j-3,k)) * 0.5
-        u_q2 = (u(I,j-3,k) + u(I,j-2,k)) * 0.5
-        u_q3 = (u(I,j-2,k) + u(I,j-1,k)) * 0.5
-        u_q4 = (u(I,j-1,k) + u(I,j  ,k)) * 0.5
-        u_q5 = (u(I,j  ,k) + u(I,j+1,k)) * 0.5
-        u_q6 = (u(I,j+1,k) + u(I,j+2,k)) * 0.5
-        u_q7 = (u(I,j+2,k) + u(I,j+3,k)) * 0.5
-        u_q8 = (u(I,j+3,k) + u(I,j+4,k)) * 0.5
+        u_q1 = (u(i,j-4,k) + u(i,j-3,k)) * 0.5
+        u_q2 = (u(i,j-3,k) + u(i,j-2,k)) * 0.5
+        u_q3 = (u(i,j-2,k) + u(i,j-1,k)) * 0.5
+        u_q4 = (u(i,j-1,k) + u(i,j  ,k)) * 0.5
+        u_q5 = (u(i,j  ,k) + u(i,j+1,k)) * 0.5
+        u_q6 = (u(i,j+1,k) + u(i,j+2,k)) * 0.5
+        u_q7 = (u(i,j+2,k) + u(i,j+3,k)) * 0.5
+        u_q8 = (u(i,j+3,k) + u(i,j+4,k)) * 0.5
         ! compute the masking to make sure that inland values are not used
         if (Ih_seventh < (CS%Ih_thresh * seventh_order) ) then
             ! all values are valid, we use seventh order reconstruction
@@ -992,24 +994,35 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 
         fifth_order   = third_order * G%mask2dCu(I,j-3) * G%mask2dCu(I,j+3)
         seventh_order = fifth_order * G%mask2dCu(I,j-4) * G%mask2dCu(I,j-4)
+        u_q1 = (u(i,j-4,k) + u(i,j-3,k)) * 0.5
+        u_q2 = (u(i,j-3,k) + u(i,j-2,k)) * 0.5
+        u_q3 = (u(i,j-2,k) + u(i,j-1,k)) * 0.5
+        u_q4 = (u(i,j-1,k) + u(i,j  ,k)) * 0.5
+        u_q5 = (u(i,j  ,k) + u(i,j+1,k)) * 0.5
+        u_q6 = (u(i,j+1,k) + u(i,j+2,k)) * 0.5
+        u_q7 = (u(i,j+2,k) + u(i,j+3,k)) * 0.5
+        u_q8 = (u(i,j+3,k) + u(i,j+4,k)) * 0.5
 
         ! compute the masking to make sure that inland values are not used
         if (seventh_order == 1) then
             ! all values are valid, we use seventh order reconstruction
             call weno_seven_reconstruction(abs_vort(I,J-4),abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), &
                                            abs_vort(I,J)  ,abs_vort(I,J+1),abs_vort(I,J+2),abs_vort(I,J+3), &
-                                           1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, v_u, q_u, .false.)
+                                           u_q1, u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, u_q8, &
+                                           v_u, q_u, cs%weno_velocity_smooth)
 
         elseif (fifth_order == 1) then
             ! all values are valid, we use fifth order reconstruction
             call weno_five_reconstruction(abs_vort(I,J-3),abs_vort(I,J-2),abs_vort(I,J-1), &
                                           abs_vort(I,J),  abs_vort(I,J+1),abs_vort(I,J+2), &
-                                          1.0, 1.0, 1.0, 1.0, 1.0, 1.0, v_u, q_u, .false.)
+                                          u_q2, u_q3, u_q4, u_q5, u_q6, u_q7, &
+                                          v_u, q_u, CS%weno_velocity_smooth)
 
         elseif (third_order == 1) then
             ! only the middle values are valid, we use third order reconstruction
             call weno_three_reconstruction(abs_vort(I,J-2),abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1), &
-                                           1.0, 1.0, 1.0, 1.0, v_u, q_u, .false.)
+                                           u_q3, u_q4, u_q5, u_q6, &
+                                           v_u, q_u, CS%weno_velocity_smooth)
         else ! Upwind first order
             if (v_u>0.) then
                 q_u = abs_vort(I,J-1)
@@ -1356,13 +1369,22 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 
         fifth_order   = third_order * G%mask2dCv(i-3,J) * G%mask2dCv(i+3,J)
         seventh_order = fifth_order * G%mask2dCv(i-4,J) * G%mask2dCv(i+4,J)
+        v_q1 = (v(i-4,J,k) + v(i-3,J,k)) * 0.5
+        v_q2 = (v(i-3,J,k) + v(i-2,J,k)) * 0.5
+        v_q3 = (v(i-2,J,k) + v(i-1,J,k)) * 0.5
+        v_q4 = (v(i-1,J,k) + v(i  ,J,k)) * 0.5
+        v_q5 = (v(i  ,J,k) + v(i+1,J,k)) * 0.5
+        v_q6 = (v(i+1,J,k) + v(i+2,J,k)) * 0.5
+        v_q7 = (v(i+2,J,k) + v(i+3,J,k)) * 0.5
+        v_q8 = (v(i+3,J,k) + v(i+4,J,k)) * 0.5
 
         ! compute the masking to make sure that inland values are not used
         if (seventh_order == 1) then
             ! all values are valid, we use seventh order reconstruction
             call weno_seven_reconstruction(abs_vort(I-4,J),abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), &
                                            abs_vort(I,J)  ,abs_vort(I+1,J),abs_vort(I+2,J),abs_vort(I+3,J), &
-                                           1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, u_v, q_v, .false.)
+                                           v_q1, v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, v_q8, &
+                                           u_v, q_v, CS%weno_velocity_smooth)
 
             ! all values are valid, we use seventh order reconstruction
 
@@ -1370,12 +1392,14 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
             ! all values are valid, we use fifth order reconstruction
             call weno_five_reconstruction(abs_vort(I-3,J),abs_vort(I-2,J),abs_vort(I-1,J), &
                                           abs_vort(I,J),abs_vort(I+1,J),abs_vort(I+2,J), &
-                                          1.0, 1.0, 1.0, 1.0, 1.0, 1.0, u_v, q_v, .false.)
+                                          v_q2, v_q3, v_q4, v_q5, v_q6, v_q7, &
+                                          u_v, q_v, CS%weno_velocity_smooth)
 
         elseif (third_order == 1) then
             ! only the middle values are valid, we use third order reconstruction
                 call weno_three_reconstruction(abs_vort(I-2,J),abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J), &
-                                               1.0, 1.0, 1.0, 1.0, u_v, q_v, .false.)
+                                               v_q3, v_q4, v_q5, v_q6, &
+                                               u_v, q_v, CS%weno_velocity_smooth)
         else ! Upwind first order!
             if (u_v>0.) then
                 q_v = abs_vort(I-1,J)
