@@ -400,6 +400,7 @@ subroutine step_MOM_dyn_split_RK2(u_inst, v_inst, h, tv, visc, Time_local, dt, f
 
   integer :: i, j, k, is, ie, js, je, Isq, Ieq, Jsq, Jeq, nz
   integer :: cont_stencil, obc_stencil
+  integer :: WENO_stencil
 
   is  = G%isc  ; ie  = G%iec  ; js  = G%jsc  ; je  = G%jec ; nz = GV%ke
   Isq = G%IscB ; Ieq = G%IecB ; Jsq = G%JscB ; Jeq = G%JecB
@@ -477,12 +478,13 @@ subroutine step_MOM_dyn_split_RK2(u_inst, v_inst, h, tv, visc, Time_local, dt, f
   call create_group_pass(CS%pass_uv, u_inst, v_inst, G%Domain, halo=max(2,cont_stencil))
 
   if (CS%CoriolisAdv%USE_WENO) then
-    call create_group_pass(CS%pass_hp_uv, hp, G%Domain, halo=5)
-    call create_group_pass(CS%pass_hp_uv, u_av, v_av, G%Domain, halo=max(5,obc_stencil))
-    call create_group_pass(CS%pass_hp_uv, uh(:,:,:), vh(:,:,:), G%Domain, halo=max(5,obc_stencil))
-    call create_group_pass(CS%pass_h, h, g%domain, halo=max(5,cont_stencil))
-    call create_group_pass(CS%pass_av_uvh, u_av, v_av, g%domain, halo=max(5,obc_stencil))
-    call create_group_pass(CS%pass_av_uvh, uh(:,:,:), vh(:,:,:), G%Domain, halo=max(5,obc_stencil))
+    WENO_stencil = CS%CoriolisAdv%WENO_stencil + 1
+    call create_group_pass(CS%pass_hp_uv, hp, G%Domain, halo=WENO_stencil)
+    call create_group_pass(CS%pass_hp_uv, u_av, v_av, G%Domain, halo=max(WENO_stencil,obc_stencil))
+    call create_group_pass(CS%pass_hp_uv, uh(:,:,:), vh(:,:,:), G%Domain, halo=max(WENO_stencil,obc_stencil))
+    call create_group_pass(CS%pass_h, h, g%domain, halo=max(WENO_stencil,cont_stencil))
+    call create_group_pass(CS%pass_av_uvh, u_av, v_av, g%domain, halo=max(WENO_stencil,obc_stencil))
+    call create_group_pass(CS%pass_av_uvh, uh(:,:,:), vh(:,:,:), G%Domain, halo=max(WENO_stencil,obc_stencil))
   else
     call create_group_pass(CS%pass_hp_uv, hp, G%Domain, halo=2)
     call create_group_pass(CS%pass_hp_uv, u_av, v_av, G%Domain, halo=max(2,obc_stencil))
@@ -792,9 +794,10 @@ subroutine step_MOM_dyn_split_RK2(u_inst, v_inst, h, tv, visc, Time_local, dt, f
 
   ! h_av = (h + hp)/2
   if (CS%CoriolisAdv%USE_WENO) then
+    WENO_stencil = CS%CoriolisAdv%WENO_stencil + 1
     call do_group_pass(CS%pass_h, G%Domain, clock=id_clock_pass)
     !$OMP parallel do default(shared)
-    do k=1,nz ; do j=js-5,je+5 ; do i=is-5,ie+5
+    do k=1,nz ; do j=js-WENO_stencil,je+WENO_stencil ; do i=is-WENO_stencil,ie+WENO_stencil
       h_av(i,j,k) = 0.5*(h(i,j,k) + hp(i,j,k))
     enddo ; enddo ; enddo
   else
@@ -1016,8 +1019,9 @@ subroutine step_MOM_dyn_split_RK2(u_inst, v_inst, h, tv, visc, Time_local, dt, f
 
 ! Later, h_av = (h_in + h_out)/2, but for now use h_av to store h_in.
   if (CS%CoriolisAdv%USE_WENO) then
+    WENO_stencil = CS%CoriolisAdv%WENO_stencil + 1
     !$OMP parallel do default(shared)
-    do k=1,nz ; do j=js-5,je+5 ; do i=is-5,ie+5
+    do k=1,nz ; do j=js-WENO_stencil,je+WENO_stencil ; do i=is-WENO_stencil,ie+WENO_stencil
       h_av(i,j,k) = h(i,j,k)
     enddo ; enddo ; enddo
   else
@@ -1062,8 +1066,9 @@ subroutine step_MOM_dyn_split_RK2(u_inst, v_inst, h, tv, visc, Time_local, dt, f
 
 ! h_av = (h_in + h_out)/2 . Going in to this line, h_av = h_in.
   if (CS%CoriolisAdv%USE_WENO) then
+    WENO_stencil = CS%CoriolisAdv%WENO_stencil + 1
     !$OMP parallel do default(shared)
-    do k=1,nz ; do j=js-5,je+5 ; do i=is-5,ie+5
+    do k=1,nz ; do j=js-WENO_stencil,je+WENO_stencil ; do i=is-WENO_stencil,ie+WENO_stencil
       h_av(i,j,k) = 0.5*(h_av(i,j,k) + h(i,j,k))
     enddo ; enddo ; enddo
   else
@@ -1403,6 +1408,7 @@ subroutine initialize_dyn_split_RK2(u, v, h, tv, uh, vh, eta, Time, G, GV, US, p
   logical :: debug_truncations
   logical :: read_uv, read_h2
   logical :: visc_rem_bug ! Stores the value of runtime paramter VISC_REM_BUG.
+  integer :: WENO_stencil 
 
   integer :: i, j, k, is, ie, js, je, isd, ied, jsd, jed, nz
   integer :: IsdB, IedB, JsdB, JedB
@@ -1612,7 +1618,8 @@ subroutine initialize_dyn_split_RK2(u, v, h, tv, uh, vh, eta, Time, G, GV, US, p
                    success=read_h2, scale=1.0/GV%H_to_mks)
       if (read_uv .and. read_h2) then
         if (CS%CoriolisAdv%USE_WENO) then
-          call pass_var(CS%h_av, G%Domain, halo=5, clock=id_clock_pass_init)
+          WENO_stencil = CS%CoriolisAdv%WENO_stencil + 1
+          call pass_var(CS%h_av, G%Domain, halo=WENO_stencil, clock=id_clock_pass_init)
         else
           call pass_var(CS%h_av, G%Domain, clock=id_clock_pass_init)
         endif
@@ -1625,15 +1632,17 @@ subroutine initialize_dyn_split_RK2(u, v, h, tv, uh, vh, eta, Time, G, GV, US, p
           CS%h_av(i,j,k) = 0.5*(h(i,j,k) + h_tmp(i,j,k))
         enddo ; enddo ; enddo
         if (CS%CoriolisAdv%USE_WENO) then
-          call pass_var(CS%h_av, G%Domain, halo=5, clock=id_clock_pass_init)
+          WENO_stencil = CS%CoriolisAdv%WENO_stencil + 1
+          call pass_var(CS%h_av, G%Domain, halo=WENO_stencil, clock=id_clock_pass_init)
         else
           call pass_var(CS%h_av, G%Domain, clock=id_clock_pass_init)
         endif
 
       endif
       if (CS%CoriolisAdv%USE_WENO) then
-        call pass_vector(CS%u_av, CS%v_av, G%Domain, halo=5, clock=id_clock_pass_init, complete=.false.)
-        call pass_vector(uh, vh, G%Domain, halo=5, clock=id_clock_pass_init, complete=.true.)
+        WENO_stencil = CS%CoriolisAdv%WENO_stencil + 1
+        call pass_vector(CS%u_av, CS%v_av, G%Domain, halo=WENO_stencil, clock=id_clock_pass_init, complete=.false.)
+        call pass_vector(uh, vh, G%Domain, halo=WENO_stencil, clock=id_clock_pass_init, complete=.true.)
       else
         call pass_vector(CS%u_av, CS%v_av, G%Domain, halo=2, clock=id_clock_pass_init, complete=.false.)
         call pass_vector(uh, vh, G%Domain, halo=2, clock=id_clock_pass_init, complete=.true.)
