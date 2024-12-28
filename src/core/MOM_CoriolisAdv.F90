@@ -983,12 +983,12 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
                                         v_u, q_u, CS%weno_velocity_smooth)
           CAu(I,j,k) = (q_u * v_u)
 
-        elseif (Ih_third < (CS%Ih_thresh * third_order)) then
+!        elseif (Ih_third < (CS%Ih_thresh * third_order)) then
           ! only the middle values are valid, we use third order reconstruction
-          call weno_three_reconstruction(q(I,J-2), q(I,J-1), q(I,J), q(I,J+1), &
-                                         u_q3, u_q4, u_q5, u_q6, &
-                                         v_u, q_u, CS%weno_velocity_smooth)
-          CAu(I,j,k) = (q_u * v_u)
+!          call weno_three_reconstruction(q(I,J-2), q(I,J-1), q(I,J), q(I,J+1), &
+!                                         u_q3, u_q4, u_q5, u_q6, &
+!                                         v_u, q_u, CS%weno_velocity_smooth)
+!          CAu(I,j,k) = (q_u * v_u)
  !       else ! Upwind first order
  !           if (v_u>0.) then
  !               q_u = q(I,J-1)
@@ -1448,12 +1448,12 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
                                         u_v, q_v, CS%weno_velocity_smooth)
           CAv(i,J,k) = - (q_v * u_v)
 
-        elseif (Ih_third < (CS%Ih_thresh * third_order)) then
-          ! only the middle values are valid, we use third order reconstruction
-          call weno_three_reconstruction(q(I-2,J), q(I-1,J), q(I,J), q(I+1,J), &
-                                         v_q3, v_q4, v_q5, v_q6, &
-                                         u_v, q_v, CS%weno_velocity_smooth)
-          CAv(i,J,k) = - (q_v * u_v)
+!        elseif (Ih_third < (CS%Ih_thresh * third_order)) then
+!          ! only the middle values are valid, we use third order reconstruction
+!          call weno_three_reconstruction(q(I-2,J), q(I-1,J), q(I,J), q(I+1,J), &
+!                                         v_q3, v_q4, v_q5, v_q6, &
+!                                         u_v, q_v, CS%weno_velocity_smooth)
+!          CAv(i,J,k) = - (q_v * u_v)
 !        else ! Upwind first order!
 !          if (u_v>0.) then
 !              q_v = q(I-1,J)
