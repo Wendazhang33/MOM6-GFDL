@@ -603,7 +603,8 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
     ! vorticities which form the Arakawa and Hsu vorticity advection
     ! scheme.  All are defined at u grid points.
 
-    if (CS%Coriolis_Scheme == ARAKAWA_HSU90) then
+    if ((CS%Coriolis_Scheme == ARAKAWA_HSU90) &
+            .or. (CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO)) then
       do j=Jsq,Jeq+1
         do I=is-1,Ieq
           a(I,j) = (q(I,J) + (q(I+1,J) + q(I,J-1))) * C1_12
@@ -998,9 +999,12 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
  !       endif
 
         else
-          CAu(I,j,k) = 0.25 * &
-               ((q(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
-                (q(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k)))) * G%IdxCu(I,j) ! Sadourny energy
+         ! CAu(I,j,k) = 0.25 * &
+         !      ((q(I,J) * (vh(i+1,J,k) + vh(i,J,k))) + &
+         !       (q(I,J-1) * (vh(i,J-1,k) + vh(i+1,J-1,k)))) * G%IdxCu(I,j) ! Sadourny energy
+              ! (Global) Energy and (Local) Enstrophy conserving, Arakawa & Hsu 1990
+          CAu(I,j,k) = (((a(I,j) * vh(i+1,J,k)) +  (c(I,j) * vh(i,J-1,k)))  + &
+                      ((b(I,j) * vh(i,J,k)) +  (d(I,j) * vh(i+1,J-1,k)))) * G%IdxCu(I,j)
         endif
       enddo ; enddo
     elseif (CS%Coriolis_Scheme == wenovi5th_PV_ENSTRO) then
@@ -1109,12 +1113,12 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
                                         v_u, q_u, CS%weno_velocity_smooth)
           CAu(I,j,k) = (q_u * v_u)
 
-        elseif (Ih_third < (CS%Ih_thresh * third_order)) then
-          ! only the middle values are valid, we use third order reconstruction
-          call weno_three_reconstruction(abs_vort(I,J-2),abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1), &
-                                         u_q3, u_q4, u_q5, u_q6, &
-                                         v_u, q_u, CS%weno_velocity_smooth)
-          CAu(I,j,k) = (q_u * v_u)
+!        elseif (Ih_third < (CS%Ih_thresh * third_order)) then
+!          ! only the middle values are valid, we use third order reconstruction
+!          call weno_three_reconstruction(abs_vort(I,J-2),abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1), &
+!                                         u_q3, u_q4, u_q5, u_q6, &
+!                                         v_u, q_u, CS%weno_velocity_smooth)
+!          CAu(I,j,k) = (q_u * v_u)
        ! else ! Upwind first order
         !    if (v_u>0.) then
         !        q_u = abs_vort(I,J-1)
@@ -1463,9 +1467,14 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 !        endif
 
         else
-          CAv(i,J,k) = - 0.25* &
-              ((q(I-1,J)*(uh(I-1,j,k) + uh(I-1,j+1,k))) + &
-               (q(I,J)*(uh(I,j,k) + uh(I,j+1,k)))) * G%IdyCv(i,J)  ! Sadourny Energy
+      !    CAv(i,J,k) = - 0.25* &
+      !        ((q(I-1,J)*(uh(I-1,j,k) + uh(I-1,j+1,k))) + &
+      !         (q(I,J)*(uh(I,j,k) + uh(I,j+1,k)))) * G%IdyCv(i,J)  ! Sadourny Energy
+      ! (Global) Energy and (Local) Enstrophy conserving, Arakawa & Hsu 1990
+          CAv(i,J,k) = - (((a(I-1,j)   * uh(I-1,j,k)) + &
+                         (c(I,j+1)   * uh(I,j+1,k)))  &
+                      + ((b(I,j)     * uh(I,j,k)) +   &
+                         (d(I-1,j+1) * uh(I-1,j+1,k)))) * G%IdyCv(i,J)
         endif
 
       enddo ; enddo
@@ -1581,12 +1590,12 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
                                         u_v, q_v, CS%weno_velocity_smooth)
           CAv(i,J,k) = - (q_v * u_v)
 
-        elseif (Ih_third < (CS%Ih_thresh * third_order)) then
-          ! only the middle values are valid, we use third order reconstruction
-          call weno_three_reconstruction(abs_vort(I-2,J),abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J), &
-                                         v_q3, v_q4, v_q5, v_q6, &
-                                         u_v, q_v, CS%weno_velocity_smooth)
-          CAv(i,J,k) = - (q_v * u_v)
+!        elseif (Ih_third < (CS%Ih_thresh * third_order)) then
+!          ! only the middle values are valid, we use third order reconstruction
+!          call weno_three_reconstruction(abs_vort(I-2,J),abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J), &
+!                                         v_q3, v_q4, v_q5, v_q6, &
+!                                         u_v, q_v, CS%weno_velocity_smooth)
+!          CAv(i,J,k) = - (q_v * u_v)
 
      !   else ! Upwind first order!
         !    if (u_v>0.) then
