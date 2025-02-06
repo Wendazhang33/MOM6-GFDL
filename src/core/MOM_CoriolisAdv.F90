@@ -1113,12 +1113,12 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
                                         v_u, q_u, CS%weno_velocity_smooth)
           CAu(I,j,k) = (q_u * v_u)
 
-!        elseif (Ih_third < (CS%Ih_thresh * third_order)) then
-!          ! only the middle values are valid, we use third order reconstruction
-!          call weno_three_reconstruction(abs_vort(I,J-2),abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1), &
-!                                         u_q3, u_q4, u_q5, u_q6, &
-!                                         v_u, q_u, CS%weno_velocity_smooth)
-!          CAu(I,j,k) = (q_u * v_u)
+        elseif (Ih_third < (CS%Ih_thresh * third_order)) then
+          ! only the middle values are valid, we use third order reconstruction
+          call weno_three_reconstruction(abs_vort(I,J-2),abs_vort(I,J-1),abs_vort(I,J),abs_vort(I,J+1), &
+                                         u_q3, u_q4, u_q5, u_q6, &
+                                         v_u, q_u, CS%weno_velocity_smooth)
+          CAu(I,j,k) = (q_u * v_u)
        ! else ! Upwind first order
         !    if (v_u>0.) then
         !        q_u = abs_vort(I,J-1)
@@ -1590,12 +1590,12 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
                                         u_v, q_v, CS%weno_velocity_smooth)
           CAv(i,J,k) = - (q_v * u_v)
 
-!        elseif (Ih_third < (CS%Ih_thresh * third_order)) then
-!          ! only the middle values are valid, we use third order reconstruction
-!          call weno_three_reconstruction(abs_vort(I-2,J),abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J), &
-!                                         v_q3, v_q4, v_q5, v_q6, &
-!                                         u_v, q_v, CS%weno_velocity_smooth)
-!          CAv(i,J,k) = - (q_v * u_v)
+        elseif (Ih_third < (CS%Ih_thresh * third_order)) then
+          ! only the middle values are valid, we use third order reconstruction
+          call weno_three_reconstruction(abs_vort(I-2,J),abs_vort(I-1,J),abs_vort(I,J),abs_vort(I+1,J), &
+                                         v_q3, v_q4, v_q5, v_q6, &
+                                         u_v, q_v, CS%weno_velocity_smooth)
+          CAv(i,J,k) = - (q_v * u_v)
 
      !   else ! Upwind first order!
         !    if (u_v>0.) then
