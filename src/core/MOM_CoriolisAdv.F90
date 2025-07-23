@@ -1050,6 +1050,15 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, k, OBC, G, GV, US, CS)
 
 end subroutine gradKE
 
+!> Compute weights for the third upwind stencil of the fifth-order WENO scheme
+subroutine weno_five_weight_0(q0, q1, q2, w0)
+  real, intent(in) :: q0, q1, q2  !< Values on three points
+  real, intent(inout) :: w0       !< Weight for this stencil
+
+  w0 = q0 * (10 * q0 - 31 * q1 + 11 * q2) + q1 * (25 * q1 - 19 * q2) + 4 * q2 * q2
+
+end subroutine weno_five_weight_0
+
 !> Initializes the control structure for MOM_CoriolisAdv
 subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
   type(time_type), target, intent(in)    :: Time !< Current model time
