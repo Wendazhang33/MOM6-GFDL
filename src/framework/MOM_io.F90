@@ -737,7 +737,10 @@ subroutine reopen_MOM_file(IO_handle, filename, vars, novars, fields, &
       call MOM_error(FATAL,"MOM_io: "//mesg)
     endif
 
-    if (nvar > 0) call IO_handle%get_file_fields(fields(1:nvar))
+    if (nvar > 0) then
+      call IO_handle%get_file_fields(fields(1:nvar))
+      fields(1:nvar)%conversion = 1.0
+    endif
   endif
 end subroutine reopen_MOM_file
 
