@@ -276,10 +276,10 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   if (CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO) stencil = 4
   if (CS%Coriolis_Scheme == wenovi5th_PV_ENSTRO) stencil = 3
 
-  Isq = Isq - stencil + 2
-  Ieq = Ieq + stencil - 2
-  Jsq = Jsq - stencil + 2
-  Jeq = Jeq + stencil - 2
+  Isq = G%IscB - stencil + 2
+  Ieq = G%IecB + stencil - 2
+  Jsq = G%JscB - stencil + 2
+  Jeq = G%JecB + stencil - 2
   !$OMP parallel do default(private) shared(Isq,Ieq,Jsq,Jeq,G,Area_h)
   do j=Jsq-1,Jeq+2 ; do I=Isq-1,Ieq+2
     Area_h(i,j) = G%mask2dT(i,j) * G%areaT(i,j)
@@ -311,10 +311,10 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
                   (Area_h(i+1,j) + Area_h(i,j+1))
   enddo ; enddo
 
-  Isq = Isq + stencil - 2
-  Ieq = Ieq - stencil + 2
-  Jsq = Jsq + stencil - 2
-  Jeq = Jeq - stencil + 2
+  Isq = G%IscB
+  Ieq = G%IecB
+  Jsq = G%JscB
+  Jeq = G%JecB
 
   Stokes_VF = .false.
   if (present(Waves)) then ; if (associated(Waves)) then
@@ -326,10 +326,10 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   !$OMP                        area_neglect, pbv, Stokes_VF)
   do k=1,nz
 
-    Isq = Isq - stencil + 2
-    Ieq = Ieq + stencil - 2
-    Jsq = Jsq - stencil + 2
-    Jeq = Jeq + stencil - 2
+    Isq = G%IscB - stencil + 2
+    Ieq = G%IecB + stencil - 2
+    Jsq = G%JscB - stencil + 2
+    Jeq = G%JecB + stencil - 2
     ! Here the second order accurate layer potential vorticities, q,
     ! are calculated.  hq is  second order accurate in space.  Relative
     ! vorticity is second order accurate everywhere with free slip b.c.s,
@@ -546,10 +546,10 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
       endif
     endif
 
-    Isq = Isq + stencil - 2
-    Ieq = Ieq - stencil + 2
-    Jsq = Jsq + stencil - 2
-    Jeq = Jeq - stencil + 2
+    Isq = G%IscB
+    Ieq = G%IecB
+    Jsq = G%JscB
+    Jeq = G%JecB
 
     if (CS%id_rv > 0) then
       do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
