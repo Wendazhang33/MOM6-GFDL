@@ -271,14 +271,11 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
   eps_vel = 1.0e-10*US%m_s_to_L_T
   h_tiny = GV%Angstrom_H  ! Perhaps this should be set to h_neglect instead.
 
-  if ((CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO) .or. &
-          CS%Coriolis_Scheme == wenovi5th_PV_ENSTRO) then
-    stencil = CoriolisAdv_stencil(CS)
-    Isq = G%IscB - stencil + 2
-    Ieq = G%IecB + stencil - 2
-    Jsq = G%JscB - stencil + 2
-    Jeq = G%JecB + stencil - 2
-  endif
+  stencil = CoriolisAdv_stencil(CS)
+  Isq = G%IscB - stencil + 2
+  Ieq = G%IecB + stencil - 2
+  Jsq = G%JscB - stencil + 2
+  Jeq = G%JecB + stencil - 2
 
   !$OMP parallel do default(private) shared(Isq,Ieq,Jsq,Jeq,G,Area_h)
   do j=Jsq-1,Jeq+2 ; do I=Isq-1,Ieq+2
@@ -542,13 +539,10 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
       endif
     endif
 
-    if ((CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO) .or. &
-            CS%Coriolis_Scheme == wenovi5th_PV_ENSTRO) then
-      Isq = G%IscB
-      Ieq = G%IecB
-      Jsq = G%JscB
-      Jeq = G%JecB
-    endif
+    Isq = G%IscB
+    Ieq = G%IecB
+    Jsq = G%JscB
+    Jeq = G%JecB
 
     if (CS%id_rv > 0) then
       do J=Jsq-1,Jeq+1 ; do I=Isq-1,Ieq+1
