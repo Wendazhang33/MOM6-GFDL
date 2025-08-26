@@ -319,16 +319,13 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
 
   !$OMP parallel do default(private) shared(u,v,h,uh,vh,CAu,CAv,G,GV,CS,AD,Area_h,Area_q,&
   !$OMP                        RV,PV,is,ie,js,je,Isq,Ieq,Jsq,Jeq,nz,vol_neglect,h_tiny,OBC,eps_vel, &
-  !$OMP                        area_neglect, pbv, Stokes_VF)
+  !$OMP                        area_neglect, pbv, Stokes_VF, stencil)
   do k=1,nz
 
-    if ((CS%Coriolis_Scheme == wenovi7th_PV_ENSTRO) .or. &
-            CS%Coriolis_Scheme == wenovi5th_PV_ENSTRO) then
-      Isq = G%IscB - stencil + 2
-      Ieq = G%IecB + stencil - 2
-      Jsq = G%JscB - stencil + 2
-      Jeq = G%JecB + stencil - 2
-    endif
+    Isq = G%IscB - stencil + 2
+    Ieq = G%IecB + stencil - 2
+    Jsq = G%JscB - stencil + 2
+    Jeq = G%JecB + stencil - 2
     ! Here the second order accurate layer potential vorticities, q,
     ! are calculated.  hq is  second order accurate in space.  Relative
     ! vorticity is second order accurate everywhere with free slip b.c.s,
