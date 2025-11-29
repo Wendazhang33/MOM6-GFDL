@@ -47,6 +47,10 @@ type, public :: mixedlayer_restrat_CS ; private
                                    !! [nondim].  This increases with grid spacing^2, up to something
                                    !! of order 500.
   real    :: ml_restrat_coef2      !< As for ml_restrat_coef but using the slow filtered MLD [nondim].
+  real    :: ml_zhang23_coef       !< A non-dimensional factor of parameterization of Zhang et al. (2023)
+                                   !! [nondim].  This increases with grid spacing^2, up to something
+                                   !! of order 500.
+  real    :: ml_zhang23_coef2      !< As for ml_restrat_coef but using the slow filtered MLD [nondim].
   real    :: front_length          !< If non-zero, is the frontal-length scale [L ~> m] used to calculate the
                                    !! upscaling of buoyancy gradients that is otherwise represented
                                    !! by the parameter FOX_KEMPER_ML_RESTRAT_COEF. If MLE_FRONT_LENGTH is
@@ -136,6 +140,8 @@ type, public :: mixedlayer_restrat_CS ; private
   integer :: id_bflux = -1
   integer :: id_lfbod = -1
   integer :: id_mle_fl = -1
+  integer :: id_sh_xx = -1
+  integer :: id_sh_xy = -1
   !>@}
 
 end type mixedlayer_restrat_CS
@@ -147,11 +153,13 @@ contains
 !> Driver for the mixed-layer restratification parameterization.
 !! The code branches between two different implementations depending
 !! on whether the bulk-mixed layer or a general coordinate are in use.
-subroutine mixedlayer_restrat(h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, VarMix, G, GV, US, CS)
+subroutine mixedlayer_restrat(h, u, v, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, VarMix, G, GV, US, CS)
   type(ocean_grid_type),                      intent(inout) :: G      !< Ocean grid structure
   type(verticalGrid_type),                    intent(in)    :: GV     !< Ocean vertical grid structure
   type(unit_scale_type),                      intent(in)    :: US     !< A dimensional unit scaling type
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: h      !< Layer thickness [H ~> m or kg m-2]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(in)  :: u        !< The zonal velocity [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(in)  :: v        !< The meridional velocity [L T-1 ~> m s-1]
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(inout) :: uhtr   !< Accumulated zonal mass flux
                                                                       !! [H L2 ~> m3 or kg]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(inout) :: vhtr   !< Accumulated meridional mass flux
@@ -181,7 +189,7 @@ subroutine mixedlayer_restrat(h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux, 
     call mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux)
   elseif (CS%use_Zhang23) then
     ! Implementation of Fox-Kemper et al., 2008, to work in general coordinates
-    call mixedlayer_restrat_Zhang23(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarMix, G, GV, US, CS)
+    call mixedlayer_restrat_Zhang23(h, u, v, uhtr, vhtr, tv, forces, dt, h_MLD, VarMix, G, GV, US, CS)
   else
     ! Implementation of Fox-Kemper et al., 2008, to work in general coordinates
     call mixedlayer_restrat_OM4(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarMix, G, GV, US, CS)
@@ -1188,12 +1196,14 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
 end subroutine mixedlayer_restrat_Bodner
 
 !> Calculates a restratifying flow in the mixed layer, following the formulation used in OM4
-subroutine mixedlayer_restrat_Zhang23(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarMix, G, GV, US, CS)
+subroutine mixedlayer_restrat_Zhang23(h, u, v, uhtr, vhtr, tv, forces, dt, h_MLD, VarMix, G, GV, US, CS)
   ! Arguments
   type(ocean_grid_type),                      intent(inout) :: G      !< Ocean grid structure
   type(verticalGrid_type),                    intent(in)    :: GV     !< Ocean vertical grid structure
   type(unit_scale_type),                      intent(in)    :: US     !< A dimensional unit scaling type
   real, dimension(SZI_(G),SZJ_(G),SZK_(GV)),  intent(inout) :: h      !< Layer thickness [H ~> m or kg m-2]
+  real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(in)    :: u      !< The zonal velocity [L T-1 ~> m s-1]
+  real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(in)    :: v      !< The meridional velocity [L T-1 ~> m s-1]
   real, dimension(SZIB_(G),SZJ_(G),SZK_(GV)), intent(inout) :: uhtr   !< Accumulated zonal mass flux
                                                                       !!   [H L2 ~> m3 or kg]
   real, dimension(SZI_(G),SZJB_(G),SZK_(GV)), intent(inout) :: vhtr   !< Accumulated meridional mass flux
@@ -1226,6 +1236,18 @@ subroutine mixedlayer_restrat_Zhang23(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarM
     htot_slow, &          ! The sum of the thicknesses of layers in the mixed layer [H ~> m or kg m-2]
     Rml_av_slow           ! Negative g_Rho0 times the average mixed layer density or G_Earth
                           ! times the average specific volume [L2 H-1 T-2 ~> m s-2 or m4 kg-1 s-2]
+!  real, dimension(SZIB_(G),SZJ_(G)) :: &
+!    MLD_fast_u, &         ! Mixed layer depth actually used in MLE restratification parameterization [H ~> m or kg m-2]
+!    MLD_slow_u,  &        ! Mixed layer depth actually used in MLE restratification parameterization [H ~> m or kg m-2]
+!  real, dimension(SZI_(G),SZJB_(G)) :: &
+!    MLD_fast_v, &         ! Mixed layer depth actually used in MLE restratification parameterization [H ~> m or kg m-2]
+!    MLD_slow_v,  &        ! Mixed layer depth actually used in MLE restratification parameterization [H ~> m or kg m-2]
+  real, dimension(SZI_(G),SZJ_(G)) :: &
+    sh_xx, &      ! horizontal tension (du/dx - dv/dy) including metric terms [T-1 ~> s-1]
+    dudx, dvdy    ! components in the horizontal tension [T-1 ~> s-1]
+  real, dimension(SZIB_(G),SZJB_(G)) :: &
+    sh_xy,  &     ! horizontal shearing strain (du/dy + dv/dx) including metric terms [T-1 ~> s-1]
+    dvdx, dudy    ! components in the shearing strain [T-1 ~> s-1]
   real :: g_Rho0          ! G_Earth/Rho0 times a thickness conversion factor
                           ! [L2 H-1 T-2 R-1 ~> m4 s-2 kg-1 or m7 s-2 kg-2]
   real :: rho_ml(SZI_(G)) ! Potential density relative to the surface [R ~> kg m-3]
@@ -1273,6 +1295,7 @@ subroutine mixedlayer_restrat_Zhang23(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarM
   real :: I_LFront  ! The inverse of the frontal length scale [L-1 ~> m-1]
   real :: vonKar_x_pi2    ! A scaling constant that is approximately the von Karman constant times
                           ! pi squared [nondim]
+  real :: strain   ! Strain rate of the flow [T-1 ~> s-1]
   character(len=128) :: mesg
   logical :: line_is_empty, keep_going, res_upscale
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
@@ -1348,6 +1371,16 @@ subroutine mixedlayer_restrat_Zhang23(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarM
       MLD_slow(i,j) = MLD_fast(i,j)
     enddo ; enddo
   endif
+!  if (CS%use_Zhang23) then
+!    do I=Isq,Ieq ; do j=js-1,je+1
+!      MLD_slow_u(I,j) = 0.5*(MLD_slow(i,j) + MLD_slow(i+1,j))
+!      MLD_fast_u(I,j) = 0.5*(MLD_fast(i,j) + MLD_fast(i+1,j))
+!    enddo ; enddo
+!    do i=is-1,ie+1 ; do J=Jsq,Jeq
+!      MLD_slow_v(i,J) = 0.5*(MLD_slow(i,j) + MLD_slow(i,j+1))
+!      MLD_fast_v(i,J) = 0.5*(MLD_fast(i,j) + MLD_fast(i,j+1))
+!    enddo ; enddo
+!  endif
 
   uDml(:) = 0.0 ; vDml(:) = 0.0
   uDml_slow(:) = 0.0 ; vDml_slow(:) = 0.0
@@ -1472,6 +1505,21 @@ subroutine mixedlayer_restrat_Zhang23(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarM
     enddo
   endif
 
+  do j=js-1,je+1 ; do i=is-1,ie+1
+    dudx(i,j) = (G%dyT(i,j)*G%IdxT(i,j))*((G%IdyCu(I,j) * u(I,j,1)) - &
+                            (G%IdyCu(I-1,j) * u(I-1,j,1)))
+    dvdy(i,j) = (G%dxT(i,j)*G%IdyT(i,j))*((G%IdxCv(i,J) * v(i,J,1)) - &
+                            (G%IdxCv(i,J-1) * v(i,J-1,1)))
+    sh_xx(i,j) = dudx(i,j) - dvdy(i,j)
+  enddo ; enddo
+  do J=js-1,je+1 ; do I=is-1,ie+1
+    dvdx(I,J) = (G%dyBu(I,J)*G%IdxBu(I,J))*((v(i+1,J,1)*G%IdyCv(i+1,J)) - &
+                            (v(i,J,1)*G%IdyCv(i,J)))
+    dudy(I,J) = (G%dxBu(I,J)*G%IdyBu(I,J))*((u(I,j+1,1)*G%IdxCu(I,j+1)) - &
+                            (u(I,j,1)*G%IdxCu(I,j)))
+    sh_xy(I,J) = G%mask2dBu(I,J) * ( dvdx(I,J) + dudy(I,J) )
+  enddo ; enddo
+
   if (CS%debug) then
     call hchksum(h, 'mixed_layer_restrat: h', G%HI, haloshift=1, unscale=GV%H_to_mks)
     call hchksum(U_star_2d, 'mixed_layer_restrat: u*', G%HI, haloshift=1, unscale=GV%H_to_m*US%s_to_T)
@@ -1509,11 +1557,12 @@ subroutine mixedlayer_restrat_Zhang23(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarM
     mom_mixrate = vonKar_x_pi2*u_star**2 / &
                   (absf*h_vel**2 + 4.0*(h_vel+h_neglect)*u_star)
     timescale = 0.0625 * (absf + 2.0*mom_mixrate) / (absf**2 + mom_mixrate**2)
-    timescale = timescale * CS%ml_restrat_coef
 
     if (res_upscale) timescale = timescale * res_scaling_fac
-    uDml(I) = timescale * G%OBCmaskCu(I,j)*G%dyCu(I,j)*G%IdxCu(I,j) * &
-        (Rml_av_fast(i+1,j)-Rml_av_fast(i,j)) * (h_vel**2)
+    strain = 0.5*(sh_xx(i+1,j)**2 + sh_xx(i,j)**2) + &
+                  0.5*(sh_xy(I,J-1)**2 + sh_xy(I,J)**2)
+    uDml(I) = (timescale**3) * strain * G%OBCmaskCu(I,j)*G%dyCu(I,j)*G%IdxCu(I,j) * &
+        (Rml_av_fast(i+1,j)-Rml_av_fast(i,j)) * (h_vel**2) * CS%ml_zhang23_coef
 
     ! As above but using the slow filtered MLD
     h_vel = 0.5*((htot_slow(i,j) + htot_slow(i+1,j)) + h_neglect)
@@ -1524,11 +1573,10 @@ subroutine mixedlayer_restrat_Zhang23(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarM
     mom_mixrate = vonKar_x_pi2*u_star**2 / &
                   (absf*h_vel**2 + 4.0*(h_vel+h_neglect)*u_star)
     timescale = 0.0625 * (absf + 2.0*mom_mixrate) / (absf**2 + mom_mixrate**2)
-    timescale = timescale * CS%ml_restrat_coef2
 
     if (res_upscale) timescale = timescale * res_scaling_fac
-    uDml_slow(I) = timescale * G%OBCmaskCu(I,j)*G%dyCu(I,j)*G%IdxCu(I,j) * &
-        (Rml_av_slow(i+1,j)-Rml_av_slow(i,j)) * (h_vel**2)
+    uDml_slow(I) = (timescale**3) * strain * G%OBCmaskCu(I,j)*G%dyCu(I,j)*G%IdxCu(I,j) * &
+        (Rml_av_slow(i+1,j)-Rml_av_slow(i,j)) * (h_vel**2) * CS%ml_zhang23_coef2
 
     if (uDml(I) + uDml_slow(I) == 0.) then
       do k=1,nz ; uhml(I,j,k) = 0.0 ; enddo
@@ -1599,11 +1647,11 @@ subroutine mixedlayer_restrat_Zhang23(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarM
     mom_mixrate = vonKar_x_pi2*u_star**2 / &
                   (absf*h_vel**2 + 4.0*(h_vel+h_neglect)*u_star)
     timescale = 0.0625 * (absf + 2.0*mom_mixrate) / (absf**2 + mom_mixrate**2)
-    timescale = timescale * CS%ml_restrat_coef
 
     if (res_upscale) timescale = timescale * res_scaling_fac
-    vDml(i) = timescale * G%OBCmaskCv(i,J)*G%dxCv(i,J)*G%IdyCv(i,J) * &
-        (Rml_av_fast(i,j+1)-Rml_av_fast(i,j)) * (h_vel**2)
+    strain = 0.5*(sh_xx(i,j+1)**2 + sh_xx(i,j)**2) + 0.5*(sh_xy(I-1,J)**2 + sh_xy(I,J)**2)
+    vDml(i) = (timescale**3) * strain * G%OBCmaskCv(i,J)*G%dxCv(i,J)*G%IdyCv(i,J) * &
+        (Rml_av_fast(i,j+1)-Rml_av_fast(i,j)) * (h_vel**2) * CS%ml_zhang23_coef
 
     ! As above but using the slow filtered MLD
     h_vel = 0.5*((htot_slow(i,j) + htot_slow(i,j+1)) + h_neglect)
@@ -1614,11 +1662,10 @@ subroutine mixedlayer_restrat_Zhang23(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarM
     mom_mixrate = vonKar_x_pi2*u_star**2 / &
                   (absf*h_vel**2 + 4.0*(h_vel+h_neglect)*u_star)
     timescale = 0.0625 * (absf + 2.0*mom_mixrate) / (absf**2 + mom_mixrate**2)
-    timescale = timescale * CS%ml_restrat_coef2
 
     if (res_upscale) timescale = timescale * res_scaling_fac
-    vDml_slow(i) = timescale * G%OBCmaskCv(i,J)*G%dxCv(i,J)*G%IdyCv(i,J) * &
-        (Rml_av_slow(i,j+1)-Rml_av_slow(i,j)) * (h_vel**2)
+    vDml_slow(i) = (timescale**3) * strain * G%OBCmaskCv(i,J)*G%dxCv(i,J)*G%IdyCv(i,J) * &
+        (Rml_av_slow(i,j+1)-Rml_av_slow(i,j)) * (h_vel**2) * CS%ml_zhang23_coef2
 
     if (vDml(i) + vDml_slow(i) == 0.) then
       do k=1,nz ; vhml(i,J,k) = 0.0 ; enddo
@@ -1692,6 +1739,8 @@ subroutine mixedlayer_restrat_Zhang23(h, uhtr, vhtr, tv, forces, dt, h_MLD, VarM
     if (CS%id_uDml          > 0) call post_data(CS%id_uDml, uDml_diag, CS%diag)
     if (CS%id_vDml          > 0) call post_data(CS%id_vDml, vDml_diag, CS%diag)
     if (CS%id_mle_fl        > 0) call post_data(CS%id_mle_fl, mle_fl_2d, CS%diag)
+    if (CS%id_sh_xx         > 0) call post_data(CS%id_sh_xx, sh_xx, CS%diag)
+    if (CS%id_sh_xy         > 0) call post_data(CS%id_sh_xy, sh_xy, CS%diag)
 
     if (CS%id_uml > 0) then
       do j=js,je ; do I=is-1,ie
@@ -2340,6 +2389,22 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
     call closeParameterBlock(param_file) ! The remaining parameters do not have MLE% prepended
   endif
 
+  if (CS%use_Zhang23) then
+    call get_param(param_file, mdl, "ZHANG23_ML_RESTRAT_COEF", CS%ml_zhang23_coef, &
+            "A nondimensional coefficient that is proportional to "//&
+            "the ratio of the deformation radius to the dominant "//&
+            "lengthscale of the submesoscale mixed layer "//&
+            "instabilities, times the minimum of the ratio of the "//&
+            "mesoscale eddy kinetic energy to the large-scale "//&
+            "geostrophic kinetic energy or 1 plus the square of the "//&
+            "grid spacing over the deformation radius, as detailed "//&
+            "by Fox-Kemper et al. (2011)", units="nondim", default=0.0)
+    if (GV%nkml==0) then
+      call get_param(param_file, mdl, "ZHANG23_ML_RESTRAT_COEF2", CS%ml_zhang23_coef2, &
+              "As for ZHANG23_ML_RESTRAT_COEF but used in a second application "//&
+              "of the MLE restratification parameterization.", units="nondim", default=0.0)
+    endif
+  endif
   if (.not.CS%use_Bodner) then
     ! This coefficient is used in both layered and ALE versions of Fox-Kemper but not Bodner
     call get_param(param_file, mdl, "FOX_KEMPER_ML_RESTRAT_COEF", CS%ml_restrat_coef, &
@@ -2507,6 +2572,14 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
     CS%id_mle_fl = register_diag_field('ocean_model', 'mle_fl', diag%axesT1, Time, &
         'Frontal length scale used in the mixed layer restratificiation parameterization', &
         'm', conversion=US%L_to_m)
+  endif
+  if (CS%use_Zhang23) then
+    CS%id_sh_xx = register_diag_field('ocean_model', 'sh_xx_ml', diag%axesT1, Time, &
+        'Normal strain in the mixed layer', &
+        'm', conversion=US%L_to_m)
+    CS%id_sh_xy = register_diag_field('ocean_model', 'sh_xy_ml', diag%axesB1, Time, &
+        'Shear strain in the mixed layer', &
+        'm', conversion=US%s_to_T)
   endif
 
   ! If MLD_filtered is being used, we need to update halo regions after a restart
