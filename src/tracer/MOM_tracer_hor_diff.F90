@@ -76,6 +76,8 @@ type, public :: tracer_hor_diff_CS ; private
                                    !! from the original form of this code, while higher values use
                                    !! mathematically equivalent expressions that recover rotational symmetry
                                    !! when DIFFUSE_ML_TO_INTERIOR is true.
+  logical :: KhTr_vert_bug         !< If true, use a vertical structure bug when neither use_neutral_diffusion
+                                   !! nor use_hor_bnd_diffusion is true
   type(neutral_diffusion_CS), pointer :: neutral_diffusion_CSp => NULL() !< Control structure for neutral diffusion.
   type(hbd_CS), pointer    :: hor_bnd_diffusion_CSp => NULL() !< Control structure for
                                                               !! horizontal boundary diffusion.
@@ -554,44 +556,64 @@ subroutine tracer_hordiff(h, dt, MEKE, VarMix, visc, G, GV, US, CS, Reg, tv, do_
           if ((k>GV%nkml) .and. (k<=GV%nk_rho_varies)) cycle
         endif
 
-        do J=js-1,je ; do i=is,ie
-          Coef_y(i,J,1) = ((scale * khdt_y(i,J))*2.0*(h(i,j,k)*h(i,j+1,k))) / &
-                                                   (h(i,j,k)+h(i,j+1,k)+h_neglect)
-        enddo ; enddo
+        if ((CS%KhTr_use_vert_struct) .and. (.not. CS%KhTr_vert_bug) ) then
+          do J=js-1,je ; do i=is,ie
+            Coef_y(i,J,k) = ((scale * khdt_y(i,J))* &
+                0.5*( VarMix%khtr_struct(i,j,k)+VarMix%khtr_struct(i,j+1,k) )* &
+                2.0*(h(i,j,k)*h(i,j+1,k))) / (h(i,j,k)+h(i,j+1,k)+h_neglect)
+          enddo ; enddo
 
-        do j=js,je
-          do I=is-1,ie
-            Coef_x(I,j,1) = ((scale * khdt_x(I,j))*2.0*(h(i,j,k)*h(i+1,j,k))) / &
-                                                     (h(i,j,k)+h(i+1,j,k)+h_neglect)
-          enddo
+          do j=js,je
+            do I=is-1,ie
+              Coef_x(I,j,1) = ((scale * khdt_x(I,j))* &
+                  0.5*( VarMix%khtr_struct(i,j,k)+VarMix%khtr_struct(i+1,j,k) )* &
+                  2.0*(h(i,j,k)*h(i+1,j,k))) / (h(i,j,k)+h(i+1,j,k)+h_neglect)
+            enddo
 
-          do i=is,ie
-            Ihdxdy(i,j) = G%IareaT(i,j) / (h(i,j,k)+h_neglect)
+            do i=is,ie
+              Ihdxdy(i,j) = G%IareaT(i,j) / (h(i,j,k)+h_neglect)
+            enddo
           enddo
-        enddo
+        else
+          do J=js-1,je ; do i=is,ie
+            Coef_y(i,J,k) = ((scale * khdt_y(i,J))*2.0*(h(i,j,k)*h(i,j+1,k))) / &
+                                                    (h(i,j,k)+h(i,j+1,k)+h_neglect)
+          enddo ; enddo
+
+          do j=js,je
+            do I=is-1,ie
+              Coef_x(I,j,k) = ((scale * khdt_x(I,j))*2.0*(h(i,j,k)*h(i+1,j,k))) / &
+                                                      (h(i,j,k)+h(i+1,j,k)+h_neglect)
+            enddo
+
+            do i=is,ie
+              Ihdxdy(i,j) = G%IareaT(i,j) / (h(i,j,k)+h_neglect)
+            enddo
+          enddo
+        endif
 
         do m=1,ntr
           do j=js,je ; do i=is,ie
             dTr(i,j) = Ihdxdy(i,j) * &
-              ( ((Coef_x(I-1,j,1) * (Reg%Tr(m)%t(i-1,j,k) - Reg%Tr(m)%t(i,j,k))) - &
-                 (Coef_x(I,j,1) * (Reg%Tr(m)%t(i,j,k) - Reg%Tr(m)%t(i+1,j,k)))) + &
-                ((Coef_y(i,J-1,1) * (Reg%Tr(m)%t(i,j-1,k) - Reg%Tr(m)%t(i,j,k))) - &
-                 (Coef_y(i,J,1) * (Reg%Tr(m)%t(i,j,k) - Reg%Tr(m)%t(i,j+1,k)))) )
+              ( ((Coef_x(I-1,j,k) * (Reg%Tr(m)%t(i-1,j,k) - Reg%Tr(m)%t(i,j,k))) - &
+                 (Coef_x(I,j,k) * (Reg%Tr(m)%t(i,j,k) - Reg%Tr(m)%t(i+1,j,k)))) + &
+                ((Coef_y(i,J-1,k) * (Reg%Tr(m)%t(i,j-1,k) - Reg%Tr(m)%t(i,j,k))) - &
+                 (Coef_y(i,J,k) * (Reg%Tr(m)%t(i,j,k) - Reg%Tr(m)%t(i,j+1,k)))) )
           enddo ; enddo
           if (associated(Reg%Tr(m)%df_x)) then ; do j=js,je ; do I=G%IscB,G%IecB
-            Reg%Tr(m)%df_x(I,j,k) = Reg%Tr(m)%df_x(I,j,k) + Coef_x(I,j,1) &
+            Reg%Tr(m)%df_x(I,j,k) = Reg%Tr(m)%df_x(I,j,k) + Coef_x(I,j,k) &
                 * (Reg%Tr(m)%t(i,j,k) - Reg%Tr(m)%t(i+1,j,k)) * Idt
           enddo ; enddo ; endif
           if (associated(Reg%Tr(m)%df_y)) then ; do J=G%JscB,G%JecB ; do i=is,ie
-            Reg%Tr(m)%df_y(i,J,k) = Reg%Tr(m)%df_y(i,J,k) + Coef_y(i,J,1) &
+            Reg%Tr(m)%df_y(i,J,k) = Reg%Tr(m)%df_y(i,J,k) + Coef_y(i,J,k) &
                 * (Reg%Tr(m)%t(i,j,k) - Reg%Tr(m)%t(i,j+1,k)) * Idt
           enddo ; enddo ; endif
           if (associated(Reg%Tr(m)%df2d_x)) then ; do j=js,je ; do I=G%IscB,G%IecB
-            Reg%Tr(m)%df2d_x(I,j) = Reg%Tr(m)%df2d_x(I,j) + Coef_x(I,j,1) &
+            Reg%Tr(m)%df2d_x(I,j) = Reg%Tr(m)%df2d_x(I,j) + Coef_x(I,j,k) &
                 * (Reg%Tr(m)%t(i,j,k) - Reg%Tr(m)%t(i+1,j,k)) * Idt
           enddo ; enddo ; endif
           if (associated(Reg%Tr(m)%df2d_y)) then ; do J=G%JscB,G%JecB ; do i=is,ie
-            Reg%Tr(m)%df2d_y(i,J) = Reg%Tr(m)%df2d_y(i,J) + Coef_y(i,J,1) &
+            Reg%Tr(m)%df2d_y(i,J) = Reg%Tr(m)%df2d_y(i,J) + Coef_y(i,J,k) &
                 * (Reg%Tr(m)%t(i,j,k) - Reg%Tr(m)%t(i,j+1,k)) * Idt
           enddo ; enddo ; endif
           do j=js,je ; do i=is,ie
@@ -1738,6 +1760,11 @@ subroutine tracer_hor_diff_init(Time, G, GV, US, param_file, diag, EOS, diabatic
                                                     CS%hor_bnd_diffusion_CSp)
   if (CS%use_hor_bnd_diffusion .and. CS%Diffuse_ML_interior) call MOM_error(FATAL, "MOM_tracer_hor_diff: "// &
        "USE_HORIZONTAL_BOUNDARY_DIFFUSION and DIFFUSE_ML_TO_INTERIOR are mutually exclusive!")
+
+  call get_param(param_file, mdl, "KHTR_VERT_BUG", CS%KhTr_vert_bug, &
+                 "If true, use a vertical structure bug when neither use_neutral_diffusion "//&
+                 "nor use_hor_bnd_diffusion is true.", &
+                 default=.true., do_not_log=((CS%use_neutral_diffusion).or.(CS%use_hor_bnd_diffusion)))
 
   call get_param(param_file, mdl, "DEBUG", CS%debug, default=.false.)
 
