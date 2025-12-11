@@ -188,7 +188,7 @@ subroutine mixedlayer_restrat(h, u, v, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, b
     ! Implementation of Bodner et al., 2023
     call mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, dt, MLD, h_MLD, bflux)
   elseif (CS%use_Zhang23) then
-    ! Implementation of Fox-Kemper et al., 2008, to work in general coordinates
+    ! Implementation of Zhang et al., 2023, to work in general coordinates
     call mixedlayer_restrat_Zhang23(h, u, v, uhtr, vhtr, tv, forces, dt, h_MLD, VarMix, G, GV, US, CS)
   else
     ! Implementation of Fox-Kemper et al., 2008, to work in general coordinates
@@ -1195,7 +1195,7 @@ subroutine mixedlayer_restrat_Bodner(CS, G, GV, US, h, uhtr, vhtr, tv, forces, d
 
 end subroutine mixedlayer_restrat_Bodner
 
-!> Calculates a restratifying flow in the mixed layer, following the formulation used in OM4
+!> Calculates a restratifying flow in the mixed layer, following the formulation in Zhang et al. (2023)
 subroutine mixedlayer_restrat_Zhang23(h, u, v, uhtr, vhtr, tv, forces, dt, h_MLD, VarMix, G, GV, US, CS)
   ! Arguments
   type(ocean_grid_type),                      intent(inout) :: G      !< Ocean grid structure
@@ -2272,7 +2272,7 @@ logical function mixedlayer_restrat_init(Time, G, GV, US, param_file, diag, CS, 
   CS%MLD_grid = .false.
   CS%Cr_grid = .false.
 
-  call get_param(param_file, mdl, "DEBUG", CS%debug, default=.false., do_not_log=.true.)
+
   call get_param(param_file, mdl, "DEFAULT_ANSWER_DATE", default_answer_date, &
       "This sets the default value for the various _ANSWER_DATE parameters.", &
       default=99991231, do_not_log=.true.)
