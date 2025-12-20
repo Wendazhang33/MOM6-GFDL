@@ -1782,7 +1782,7 @@ real function mu2(sigma)
   !mu = max(0., (1. - (2.*sigma + 1.)**2))
 
   ! Second order, in Rossby number, shape. See eq 21 from FK08a, eq 9 from FK08b, eq 5 FK11
-  mu2 = C4_3 * sigma * exp(C8_9 * sigma**2 + 0.5) 
+  mu2 = C4_3 * sigma * exp(C8_9 * sigma**2 + 0.5)
 
 end function mu2
 
