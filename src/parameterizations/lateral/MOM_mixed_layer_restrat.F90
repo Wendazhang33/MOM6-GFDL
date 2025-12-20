@@ -1295,7 +1295,7 @@ subroutine mixedlayer_restrat_Zhang23(h, u, v, uhtr, vhtr, tv, forces, dt, h_MLD
   real :: I_LFront  ! The inverse of the frontal length scale [L-1 ~> m-1]
   real :: vonKar_x_pi2    ! A scaling constant that is approximately the von Karman constant times
                           ! pi squared [nondim]
-  real :: strain   ! Strain rate of the flow [T-1 ~> s-1]
+  real :: strain_sq   ! Square of the strain rate of the flow [T-2 ~> s-2]
   character(len=128) :: mesg
   logical :: line_is_empty, keep_going, res_upscale
   integer, dimension(2) :: EOSdom ! The i-computational domain for the equation of state
@@ -1559,9 +1559,9 @@ subroutine mixedlayer_restrat_Zhang23(h, u, v, uhtr, vhtr, tv, forces, dt, h_MLD
     timescale = 0.0625 * (absf + 2.0*mom_mixrate) / (absf**2 + mom_mixrate**2)
 
     if (res_upscale) timescale = timescale * res_scaling_fac
-    strain = 0.5*(sh_xx(i+1,j)**2 + sh_xx(i,j)**2) + &
+    strain_sq = 0.5*(sh_xx(i+1,j)**2 + sh_xx(i,j)**2) + &
                   0.5*(sh_xy(I,J-1)**2 + sh_xy(I,J)**2)
-    uDml(I) = (timescale**3) * strain * G%OBCmaskCu(I,j)*G%dyCu(I,j)*G%IdxCu(I,j) * &
+    uDml(I) = (timescale**3) * strain_sq * G%OBCmaskCu(I,j)*G%dyCu(I,j)*G%IdxCu(I,j) * &
         (Rml_av_fast(i+1,j)-Rml_av_fast(i,j)) * (h_vel**2) * CS%ml_zhang23_coef
 
     ! As above but using the slow filtered MLD
@@ -1575,7 +1575,7 @@ subroutine mixedlayer_restrat_Zhang23(h, u, v, uhtr, vhtr, tv, forces, dt, h_MLD
     timescale = 0.0625 * (absf + 2.0*mom_mixrate) / (absf**2 + mom_mixrate**2)
 
     if (res_upscale) timescale = timescale * res_scaling_fac
-    uDml_slow(I) = (timescale**3) * strain * G%OBCmaskCu(I,j)*G%dyCu(I,j)*G%IdxCu(I,j) * &
+    uDml_slow(I) = (timescale**3) * strain_sq * G%OBCmaskCu(I,j)*G%dyCu(I,j)*G%IdxCu(I,j) * &
         (Rml_av_slow(i+1,j)-Rml_av_slow(i,j)) * (h_vel**2) * CS%ml_zhang23_coef2
 
     if (uDml(I) + uDml_slow(I) == 0.) then
@@ -1649,8 +1649,8 @@ subroutine mixedlayer_restrat_Zhang23(h, u, v, uhtr, vhtr, tv, forces, dt, h_MLD
     timescale = 0.0625 * (absf + 2.0*mom_mixrate) / (absf**2 + mom_mixrate**2)
 
     if (res_upscale) timescale = timescale * res_scaling_fac
-    strain = 0.5*(sh_xx(i,j+1)**2 + sh_xx(i,j)**2) + 0.5*(sh_xy(I-1,J)**2 + sh_xy(I,J)**2)
-    vDml(i) = (timescale**3) * strain * G%OBCmaskCv(i,J)*G%dxCv(i,J)*G%IdyCv(i,J) * &
+    strain_sq = 0.5*(sh_xx(i,j+1)**2 + sh_xx(i,j)**2) + 0.5*(sh_xy(I-1,J)**2 + sh_xy(I,J)**2)
+    vDml(i) = (timescale**3) * strain_sq * G%OBCmaskCv(i,J)*G%dxCv(i,J)*G%IdyCv(i,J) * &
         (Rml_av_fast(i,j+1)-Rml_av_fast(i,j)) * (h_vel**2) * CS%ml_zhang23_coef
 
     ! As above but using the slow filtered MLD
@@ -1664,7 +1664,7 @@ subroutine mixedlayer_restrat_Zhang23(h, u, v, uhtr, vhtr, tv, forces, dt, h_MLD
     timescale = 0.0625 * (absf + 2.0*mom_mixrate) / (absf**2 + mom_mixrate**2)
 
     if (res_upscale) timescale = timescale * res_scaling_fac
-    vDml_slow(i) = (timescale**3) * strain * G%OBCmaskCv(i,J)*G%dxCv(i,J)*G%IdyCv(i,J) * &
+    vDml_slow(i) = (timescale**3) * strain_sq * G%OBCmaskCv(i,J)*G%dxCv(i,J)*G%IdyCv(i,J) * &
         (Rml_av_slow(i,j+1)-Rml_av_slow(i,j)) * (h_vel**2) * CS%ml_zhang23_coef2
 
     if (vDml(i) + vDml_slow(i) == 0.) then
@@ -1765,6 +1765,7 @@ subroutine mixedlayer_restrat_Zhang23(h, u, v, uhtr, vhtr, tv, forces, dt, h_MLD
 end subroutine mixedlayer_restrat_Zhang23
 
 !> Stream function shape as a function of non-dimensional position within mixed-layer [nondim]
+!! Formulation given in Zhang et al. (2023)
 real function mu2(sigma)
   real, intent(in) :: sigma !< Fractional position within mixed layer [nondim]
                             !! z=0 is surface, z=-1 is the bottom of the mixed layer
@@ -1777,11 +1778,7 @@ real function mu2(sigma)
   real, parameter :: C4_3 = -4.0/3.0  !< The ratio of -4/3 [nondim]
   real, parameter :: C8_9 = -8.0/9.0  !< The ratio of -8/9 [nondim]
 
-  ! Lower order shape (not used), see eq 10 from FK08b.
-  ! Apparently used in CM2G, see eq 14 of FK11.
-  !mu = max(0., (1. - (2.*sigma + 1.)**2))
-
-  ! Second order, in Rossby number, shape. See eq 21 from FK08a, eq 9 from FK08b, eq 5 FK11
+  ! Shape function given by Eq. (10) in Zhang et al. (2023)
   mu2 = C4_3 * sigma * exp(C8_9 * sigma**2 + 0.5)
 
 end function mu2
