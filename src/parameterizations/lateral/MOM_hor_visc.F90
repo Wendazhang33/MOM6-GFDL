@@ -85,9 +85,10 @@ type, public :: hor_visc_CS ; private
   logical :: use_beta_in_Leith !< If true, includes the beta term in the Leith viscosity
   logical :: Leith_Ah        !< If true, use a biharmonic form of 2D Leith
                              !! nonlinear eddy viscosity. AH is the background.
-  logical :: use_Leithy      !< If true, use a biharmonic form of 2D Leith
+  logical :: use_leithy      !< if true, use a biharmonic form of 2d leith
                              !! nonlinear eddy viscosity with harmonic backscatter.
-                             !! Ah is the background. Leithy = Leith+E
+                             !! ah is the background. leithy = leith+e
+  logical :: div_damp        !< if true, apply the viscosity to damp the divergent component of flows
   real    :: c_K             !< Fraction of energy dissipated by the biharmonic term
                              !! that gets backscattered in the Leith+E scheme. [nondim]
   logical :: smooth_Ah       !< If true (default), then Ah and m_leithy are smoothed.
@@ -327,6 +328,8 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
     sh_xx_smooth, & ! horizontal tension from smoothed velocity including metric terms [T-1 ~> s-1]
     sh_xx_bt, &   ! barotropic horizontal tension (du/dx - dv/dy) including metric terms [T-1 ~> s-1]
     str_xx,&      ! str_xx is the diagonal term in the stress tensor [H L2 T-2 ~> m3 s-2 or kg s-2], but
+                  ! at some points in the code it is not yet layer integrated, so is in [L2 T-2 ~> m2 s-2].
+    str_div,&     ! str_div is the divergence term in the stress tensor [H L2 T-2 ~> m3 s-2 or kg s-2], but
                   ! at some points in the code it is not yet layer integrated, so is in [L2 T-2 ~> m2 s-2].
     str_xx_GME,&  ! smoothed diagonal term in the stress tensor from GME [L2 T-2 ~> m2 s-2]
     bhstr_xx, &   ! A copy of str_xx that only contains the biharmonic contribution [H L2 T-2 ~> m3 s-2 or kg s-2]
@@ -693,6 +696,7 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
   !$OMP   dudx, dudy, dvdx, dvdy, sh_xx, sh_xy, h_u, h_v, &
   !$OMP   Del2u, Del2v, DY_dxBu, DX_dyBu, sh_xx_bt, sh_xy_bt, &
   !$OMP   str_xx, str_xy, bhstr_xx, bhstr_xy, str_xx_GME, str_xy_GME, &
+  !$OMP   str_div, &
   !$OMP   vort_xy, vort_xy_dx, vort_xy_dy, div_xx, div_xx_dx, div_xx_dy, &
   !$OMP   grad_div_mag_h, grad_div_mag_q, grad_vort_mag_h, grad_vort_mag_q, &
   !$OMP   grad_vort, grad_vort_qg, grad_vort_mag_h_2d, grad_vort_mag_q_2d, &
@@ -1147,6 +1151,13 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
       enddo ; enddo
     endif
 
+    if (CS%div_damp) then
+    ! Divergence
+      do j=Jsq-1,Jeq+2 ; do i=Isq-1,Ieq+2
+        div_xx(i,j) = dudx(i,j) + dvdy(i,j)
+      enddo ; enddo
+    endif
+
     if (CS%Laplacian) then
       ! Determine the Laplacian viscosity at h points, using the
       ! largest value from several parameterizations. Also get
@@ -1284,16 +1295,23 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
         enddo ; enddo
       endif
 
-      do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
-        str_xx(i,j) = -Kh(i,j) * sh_xx(i,j)
-      enddo ; enddo
+      if (.not. CS%div_damp) then
+        do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+          str_xx(i,j) = -Kh(i,j) * sh_xx(i,j)
+        enddo ; enddo
+      else
+        do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+          str_xx(i,j) = 0.0
+          str_div(i,j) = -Kh(i,j) * div_xx(i,j)
+        enddo ; enddo
+      endif
     else
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         str_xx(i,j) = 0.0
       enddo ; enddo
     endif ! Get Kh at h points and get Laplacian component of str_xx
 
-    if (CS%anisotropic) then
+    if (CS%anisotropic .and. (.not. CS%div_damp)) then
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         ! Shearing-strain averaged to h-points
         local_strain = 0.25 * ( (sh_xy(I,J) + sh_xy(I-1,J-1)) + (sh_xy(I-1,J) + sh_xy(I,J-1)) )
@@ -1720,13 +1738,18 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
           str_xy(I,J) = -Kh(I,J) * sh_xy_smooth(I,J)
         enddo ; enddo
       endif
+      if (CS%div_damp) then
+        do J=js-1,Jeq ; do I=is-1,Ieq
+          str_xy(I,J) = 0.
+        enddo ; enddo
+      endif
     else
       do J=js-1,Jeq ; do I=is-1,Ieq
         str_xy(I,J) = 0.
       enddo ; enddo
     endif ! get harmonic coefficient Kh at q points and harmonic part of str_xy
 
-    if (CS%anisotropic) then
+    if (CS%anisotropic .and. .not. CS%div_damp) then
       do J=js-1,Jeq ; do I=is-1,Ieq
         ! Horizontal-tension averaged to q-points
         local_strain = 0.25 * ( (sh_xx(i,j) + sh_xx(i+1,j+1)) + (sh_xx(i+1,j) + sh_xx(i,j+1)) )
@@ -1891,6 +1914,12 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         str_xx(i,j) = (str_xx(i,j) + str_xx_GME(i,j)) * (h(i,j,k) * CS%reduction_xx(i,j))
       enddo ; enddo
+      ! This changes the units of str_div from [L2 T-2 ~> m2 s-2] to [H L2 T-2 ~> m3 s-2 or kg s-2].
+      if (CS%div_damp) then
+        do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+          str_div(i,j) = str_div(i,j) * (h(i,j,k) * CS%reduction_xx(i,j))
+        enddo ; enddo
+      endif
 
       ! This adds in GME and changes the units of str_xx from [L2 T-2 ~> m2 s-2] to [H L2 T-2 ~> m3 s-2 or kg s-2].
       if (CS%no_slip) then
@@ -1908,6 +1937,12 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
       do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
         str_xx(i,j) = str_xx(i,j) * (h(i,j,k) * CS%reduction_xx(i,j))
       enddo ; enddo
+      ! This changes the units of str_div from [L2 T-2 ~> m2 s-2] to [H L2 T-2 ~> m3 s-2 or kg s-2].
+      if (CS%div_damp) then
+        do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+          str_div(i,j) = str_div(i,j) * (h(i,j,k) * CS%reduction_xx(i,j))
+        enddo ; enddo
+      endif
 
       ! This changes the units of str_xy from [L2 T-2 ~> m2 s-2] to [H L2 T-2 ~> m3 s-2 or kg s-2].
       if (CS%no_slip) then
@@ -1927,6 +1962,13 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
                        G%IdyCu(I,j)*((CS%dy2h(i,j)*str_xx(i,j)) - (CS%dy2h(i+1,j)*str_xx(i+1,j)))) * &
                      G%IareaCu(I,j)) / (h_u(I,j) + h_neglect)
     enddo ; enddo
+    if (CS%div_damp) then
+      do j=js,je ; do I=Isq,Ieq
+        diffu(I,j,k) = diffu(I,j,k) + &
+                       ((G%IdyCu(I,j)*((CS%dy2h(i,j)*str_div(i,j)) - (CS%dy2h(i+1,j)*str_div(i+1,j)))) * &
+                         G%IareaCu(I,j)) / (h_u(I,j) + h_neglect)
+      enddo ; enddo
+    endif
 
     if (apply_OBC) then
       ! This is not the right boundary condition. If all the masking of tendencies are done
@@ -1947,6 +1989,13 @@ subroutine horizontal_viscosity(u, v, h, uh, vh, diffu, diffv, MEKE, VarMix, G, 
                        G%IdxCv(i,J)*((CS%dx2h(i,j)*str_xx(i,j)) - (CS%dx2h(i,j+1)*str_xx(i,j+1)))) * &
                      G%IareaCv(i,J)) / (h_v(i,J) + h_neglect)
     enddo ; enddo
+    if (CS%div_damp) then
+      do J=Jsq,Jeq ; do i=is,ie
+        diffv(i,J,k) = diffv(i,J,k) + &
+                       ((G%IdxCv(i,J)*((CS%dx2h(i,j)*str_div(i,j)) - (CS%dx2h(i,j+1)*str_div(i,j+1)))) * &
+                      G%IareaCv(i,J)) / (h_v(i,J) + h_neglect)
+      enddo ; enddo
+    endif
 
     if (apply_OBC) then
       ! This is not the right boundary condition. If all the masking of tendencies are done
@@ -2557,6 +2606,11 @@ subroutine hor_visc_init(Time, G, GV, US, param_file, diag, CS, ADp)
                  "If true, use a biharmonic Leith nonlinear eddy "//&
                  "viscosity together with a harmonic backscatter.", &
                  default=.false.)
+  call get_param(param_file, mdl, "DIV_DAMP", CS%div_damp, &
+                 "If true, apply the viscosity to damp the divergent component "//&
+                 "of velocities.", &
+                 default=.false., do_not_log=.not.CS%Laplacian)
+  if (.not.CS%Laplacian) CS%div_damp = .false.
   call get_param(param_file, mdl, "BOUND_AH", CS%bound_Ah, &
                  "If true, the biharmonic coefficient is locally limited "//&
                  "to be stable.", default=.true., do_not_log=.not.CS%biharmonic)
