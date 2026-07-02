@@ -48,7 +48,7 @@ type, public :: CoriolisAdv_CS ; private
                              !! deformation radius is poorly resolved.
   integer :: KE_Scheme       !< KE_SCHEME selects the discretization for
                              !! the kinetic energy. Valid values are:
-                             !!  KE_ARAKAWA, KE_SIMPLE_GUDONOV, KE_GUDONOV
+                             !!  KE_ARAKAWA, KE_SIMPLE_GUDONOV, KE_GUDONOV, KE_UP3, KE_UP3_THICK
   logical :: KE_use_limiter  !< If true, use the Koren limiter for KE_UP3 scheme
   integer :: PV_Adv_Scheme   !< PV_ADV_SCHEME selects the discretization for PV advection
                              !! Valid values are:
@@ -124,10 +124,12 @@ integer, parameter :: KE_ARAKAWA        = 10
 integer, parameter :: KE_SIMPLE_GUDONOV = 11
 integer, parameter :: KE_GUDONOV        = 12
 integer, parameter :: KE_UP3            = 13
+integer, parameter :: KE_UP3_THICK      = 14
 character*(20), parameter :: KE_ARAKAWA_STRING = "KE_ARAKAWA"
 character*(20), parameter :: KE_SIMPLE_GUDONOV_STRING = "KE_SIMPLE_GUDONOV"
 character*(20), parameter :: KE_GUDONOV_STRING = "KE_GUDONOV"
 character*(20), parameter :: KE_UP3_STRING = "KE_UP3"
+character*(20), parameter :: KE_UP3_THICK_STRING = "KE_UP3_THICK"
 !>@}
 !>@{ Enumeration values for PV_Adv_Scheme
 integer, parameter :: PV_ADV_CENTERED   = 21
@@ -690,7 +692,7 @@ subroutine CorAdCalc(u, v, h, uh, vh, CAu, CAv, OBC, AD, G, GV, US, CS, pbv, Wav
     endif
 
     ! Calculate KE and the gradient of KE
-    call gradKE(u(:,:,k), v(:,:,k), h(:,:,k), KE, KEx, KEy, G, GV, US, CS)
+    call gradKE(u(:,:,k), v(:,:,k), h(:,:,k), uh(:,:,k), vh(:,:,k), KE, KEx, KEy, G, GV, US, CS)
 
     ! Calculate the tendencies of zonal velocity due to the Coriolis
     ! force and momentum advection.  On a Cartesian grid, this is
@@ -1246,12 +1248,14 @@ end subroutine CorAdCalc
 
 
 !> Calculates the acceleration due to the gradient of kinetic energy in one layer.
-subroutine gradKE(u, v, h, KE, KEx, KEy, G, GV, US, CS)
+subroutine gradKE(u, v, h, uh, vh, KE, KEx, KEy, G, GV, US, CS)
   type(ocean_grid_type),             intent(in)  :: G   !< Ocean grid structure
   type(verticalGrid_type),           intent(in)  :: GV  !< Vertical grid structure
   real, dimension(SZIB_(G),SZJ_(G)), intent(in)  :: u   !< Zonal velocity [L T-1 ~> m s-1]
   real, dimension(SZI_(G),SZJB_(G)), intent(in)  :: v   !< Meridional velocity [L T-1 ~> m s-1]
   real, dimension(SZI_(G),SZJ_(G)),  intent(in)  :: h   !< Layer thickness [H ~> m or kg m-2]
+  real, dimension(SZIB_(G),SZJ_(G)), intent(in)  :: uh   !< Zonal thickness flux [L3 T-1 ~> m3 s-1]
+  real, dimension(SZI_(G),SZJB_(G)), intent(in)  :: vh   !< Meridional thickness flux [L3 T-1 ~> m3 s-1]
   real, dimension(SZI_(G),SZJ_(G)),  intent(out) :: KE  !< Kinetic energy per unit mass [L2 T-2 ~> m2 s-2]
   real, dimension(SZIB_(G),SZJ_(G)), intent(out) :: KEx !< Zonal acceleration due to kinetic
                                                         !! energy gradient [L T-2 ~> m s-2]
@@ -1260,7 +1264,7 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, G, GV, US, CS)
   type(unit_scale_type),             intent(in)  :: US  !< A dimensional unit scaling type
   type(CoriolisAdv_CS),              intent(in)  :: CS  !< Control structure for MOM_CoriolisAdv
   ! Local variables
-  real :: um, up, vm, vp         ! Temporary variables [L T-1 ~> m s-1].
+  real :: um, up, vm, vp         ! Temporary variables [L T-1 ~> m s-1] or [L3 T-1 ~> m3 s-1].
   real :: um2, up2, vm2, vp2     ! Temporary variables [L2 T-2 ~> m2 s-2].
   real :: um2a, up2a, vm2a, vp2a ! Temporary variables [L4 T-2 ~> m4 s-2].
   real :: third_order_u, third_order_v  ! Product of mask values to determine the boundary
@@ -1382,6 +1386,46 @@ subroutine gradKE(u, v, h, KE, KEx, KEy, G, GV, US, CS)
         KE(i,j) = ( (um*um) + (vm*vm) )*0.5
       enddo ; enddo
     endif
+  elseif (CS%KE_Scheme == KE_UP3_THICK) then
+    ! The following discretization of KE is based on the one-dimensional third-order
+    ! upwind scheme
+    do j=Jsq,Jeq+1 ; do i=Isq,Ieq+1
+      ! compute the masking to make sure that inland values are not used
+      third_order_u = (G%mask2dCu(I-2,j) * G%mask2dCu(I-1,j)* &
+                      G%mask2dCu(I,j) * G%mask2dCu(I+1,j))
+
+      if (third_order_u == 1) then
+        up = (uh(I-1,j) + uh(I,j))*0.5*G%IdyT(i,j)
+        call UP3_reconstruction(u(I-2:I+1,j), up, um)
+      else
+        up = (uh(I-1,j) + uh(I,j))*0.5*G%IdyT(i,j)
+        if (up>0.) then
+          um = u(I-1,j)
+        elseif (up<0.) then
+          um = u(I,j)
+        else
+          um = (u(I-1,j) + u(I,j))*0.5
+        endif
+      endif
+
+      third_order_v = (G%mask2dCv(i,J-2) * G%mask2dCv(i,J-1)* &
+                      G%mask2dCv(i,J) * G%mask2dCv(i,J+1))
+      if (third_order_v ==1) then
+        vp = (vh(i,J-1) + vh(i,J))*0.5*G%IdxT(i,j)
+        call UP3_reconstruction(v(i,J-2:J+1), vp, vm)
+      else
+        vp = (vh(i,J-1) + vh(i,J))*0.5*G%IdxT(i,j)
+        if (vp>0.) then
+          vm = v(i,J-1)
+        elseif (vp<0.) then
+          vm = v(i,J)
+        else
+          vm = (v(i,J-1) + v(i,J))*0.5
+        endif
+      endif
+
+      KE(i,j) = ( (um*up) + (vm*vp) )*0.5/(h(i,j) + GV%Angstrom_H)
+    enddo ; enddo
   endif
 
   ! Term - d(KE)/dx.
@@ -2017,7 +2061,7 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
   call get_param(param_file, mdl, "KE_SCHEME", tmpstr, &
                  "KE_SCHEME selects the discretization for acceleration "//&
                  "due to the kinetic energy gradient. Valid values are: \n"//&
-                 "\t KE_ARAKAWA, KE_SIMPLE_GUDONOV, KE_GUDONOV, KE_UP3", &
+                 "\t KE_ARAKAWA, KE_SIMPLE_GUDONOV, KE_GUDONOV, KE_UP3, KE_UP3_THICK", &
                  default=KE_ARAKAWA_STRING)
   tmpstr = uppercase(tmpstr)
   select case (tmpstr)
@@ -2025,6 +2069,7 @@ subroutine CoriolisAdv_init(Time, G, GV, US, param_file, diag, AD, CS)
     case (KE_SIMPLE_GUDONOV_STRING); CS%KE_Scheme = KE_SIMPLE_GUDONOV
     case (KE_GUDONOV_STRING); CS%KE_Scheme = KE_GUDONOV
     case (KE_UP3_STRING); CS%KE_Scheme = KE_UP3
+    case (KE_UP3_THICK_STRING); CS%KE_Scheme = KE_UP3_THICK
     case default
       call MOM_mesg('CoriolisAdv_init: KE_Scheme ="'//trim(tmpstr)//'"', 0)
       call MOM_error(FATAL, "CoriolisAdv_init: "// &
